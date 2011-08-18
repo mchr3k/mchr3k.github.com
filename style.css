@@ -77,20 +77,11 @@ body
 
 .col2 a:hover { border-bottom: 1px dotted #000; text-decoration: none; }
 
-h1
+h2
 {
     border-bottom: 1px solid #CCCCCC;
     margin: 0px;
-    padding: 0px;
-}
-
-h2
-{
-    border-top: 4px solid #CCCCCC;
-    font-size: 22px;
-    line-height: normal;
-    margin: 22px 0 0;
-    padding: 7px 0 0;
+    padding: 0px;    
 }
 
 pre
