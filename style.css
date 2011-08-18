@@ -36,7 +36,7 @@ body
 	float:left;
 	width:200%;
 	position:relative;
-	left:200px;
+	left:230px;
 	background:#fff;
 }
 .leftmenu .col1wrap 
@@ -44,7 +44,7 @@ body
 	float:right;
 	width:50%;
 	position:relative;
-	right:200px;
+	right:230px;
 	padding-bottom:1em;
 }
 
@@ -58,9 +58,9 @@ body
 .leftmenu .col2 
 {
 	float:left;
-	width:170px;
+	width:200px;
 	position:relative;
-	right:185px;
+	right:215px;
 }
 
 .col1 a 
@@ -116,7 +116,7 @@ p
 	border-color:#CCCCCC;
 	border-width:1px;
 	border-style:solid;
-	width: 154px;
+	width: 184px;
 	background:#EFEFEF;
 	padding:8px;	
 }
