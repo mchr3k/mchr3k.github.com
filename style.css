@@ -77,6 +77,12 @@ body
 
 .col2 a:hover { border-bottom: 1px dotted #000; text-decoration: none; }
 
+h1
+{
+    margin: 0px;
+    padding: 0px;    
+}
+
 h2
 {
     border-bottom: 1px solid #CCCCCC;
