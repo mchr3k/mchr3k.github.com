@@ -90,6 +90,13 @@ h2
     padding: 0px;    
 }
 
+h3
+{
+    border-bottom: 1px solid #CCCCCC;
+    margin: 16px 0 0;
+    padding: 0px;    
+}
+
 pre
 {
     background-color: #F8F8F8;
