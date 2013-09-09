@@ -50,7 +50,7 @@ body
 
 .leftmenu .col1 
 {
-	margin:0 15px 0 200px;
+	margin:0 15px 0 190px;
 	position:relative;
 	right:100%;
 	padding: 8px;
@@ -58,7 +58,7 @@ body
 .leftmenu .col2 
 {
 	float:left;
-	width:170px;
+	width:160px;
 	position:relative;
 	right:185px;
 }
@@ -119,11 +119,12 @@ p
 
 .navwrapper
 {
+margin-bottom: 15px;
 	margin-top:5px;
 	border-color:#CCCCCC;
 	border-width:1px;
 	border-style:solid;
-	width: 154px;
+	width: 144px;
 	background:#EFEFEF;
 	padding:8px;	
 }
