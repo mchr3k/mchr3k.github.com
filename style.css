@@ -95,3 +95,16 @@ p {
 .bold {
   font-weight: bold;
 }
+
+.iconlink a {
+  text-decoration: none;
+}
+
+.iconlink span {
+  font-weight: bold;
+  vertical-align: middle;
+}
+
+.iconlink img {
+  vertical-align: middle;
+}
