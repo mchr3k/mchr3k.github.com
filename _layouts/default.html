@@ -23,53 +23,43 @@
 
   <body>
     <div id="title">
-      <h1>Martin Hare Robertson</h1>
+      <h1>{{ page.title }}</h1>
     </div>
 
-    <div class="colmask leftmenu">
-      <div class="colright">
-        <div class="col1wrap">
-          <div class="col1">{{ content }}</div>
-        </div>
-        <div class="col2">
-          <div class="navwrapper">
-            <a href="./">Home</a><br />
-            <br />
-            <strong>Open Source (2010 - 2014)</strong>
-            <br />
-            <ul class="nav">
-              <li><a href="org.intrace/">InTrace</a></li>
-              <li><a href="org.inmemprofiler/">InMemProfiler</a></li>
-              <li>
-                <a href="javathreaddumpanalyser/">Java Thread Dump Analyser</a>
-              </li>
-              <li><a href="jlta/">Java Live Thread Analyser</a></li>
-              <li><a href="swtjar/">SWTJar</a></li>
-              <li><a href="emmacheck/">EmmaCheck</a></li>
-              <li><a href="jdeclipse-realign/">JDEclipse-Realign</a></li>
-              <li><a href="codetrails/">Code Trails</a></li>
-              <li><a href="jacoco/">jacoco</a></li>
-              <li>
-                <a href="arduino-libs-manchester/"
-                  >Arduino Manchester Encoding</a
-                >
-              </li>
-            </ul>
-
-            <br />
-            <strong>Blog Archive (last post in 2013)</strong>
-            <br />
-            <ul class="nav">
-              <li>
-                <a href="http://mchr3k-arduino.blogspot.com/">Arduino Blog</a>
-              </li>
-              <li>
-                <a href="http://mchr3k-coding.blogspot.co.uk/">Coding Blog</a>
-              </li>
-            </ul>
-          </div>
-        </div>
+    <div class="layout">
+      <div class="menu">
+        <div><a href="./">Home</a></div>
+        <strong>Open Source <br />(2010 - 2014)</strong>
+        <div><a href="./opensource-downloadstats.html">Download Stats</a></div>
+        <div><a href="./opensource-projects.html">Projects Overview</a></div>
+        <ul>
+          <li><a href="org.intrace/">InTrace</a></li>
+          <li><a href="org.inmemprofiler/">InMemProfiler</a></li>
+          <li>
+            <a href="javathreaddumpanalyser/">Java Thread Dump Analyser</a>
+          </li>
+          <li><a href="jlta/">Java Live Thread Analyser</a></li>
+          <li><a href="swtjar/">SWTJar</a></li>
+          <li><a href="emmacheck/">EmmaCheck</a></li>
+          <li><a href="jdeclipse-realign/">JDEclipse-Realign</a></li>
+          <li><a href="codetrails/">Code Trails</a></li>
+          <li><a href="jacoco/">jacoco</a></li>
+          <li>
+            <a href="arduino-libs-manchester/">Arduino Manchester Encoding</a>
+          </li>
+        </ul>
+        <strong>Blog Archive <br />(last post in 2013)</strong>
+        <ul>
+          <li>
+            <a href="http://mchr3k-arduino.blogspot.com/">Arduino Blog</a>
+          </li>
+          <li>
+            <a href="http://mchr3k-coding.blogspot.co.uk/">Coding Blog</a>
+          </li>
+        </ul>
       </div>
+
+      <div class="content">{{ content }}</div>
     </div>
   </body>
 </html>

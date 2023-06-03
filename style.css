@@ -1,4 +1,11 @@
-/* CSS Document */
+body {
+  /* Native Font Stack: https://www.smashingmagazine.com/2015/11/using-system-ui-fonts-practical-guide/ */
+  font-family: -apple-system, BlinkMacSystemFont, “Segoe UI”, “Roboto”, “Oxygen”,
+    “Ubuntu”, “Cantarell”, “Fira Sans”, “Droid Sans”, “Helvetica Neue”,
+    sans-serif;
+  /* Remove default margins */
+  margin: 0px;
+}
 
 #title {
   border-color: #cccccc;
@@ -8,67 +15,49 @@
   padding: 10px;
 }
 
-/* General styles */
-body {
-  margin: 0;
-  padding: 0;
-  border: 0; /* This removes the border around the viewport in old versions of IE */
-  width: 100%;
-  background: #fff;
-  min-width: 600px; /* Minimum width of layout - remove line if not required */
-  /* The min-width property does not work in old versions of Internet Explorer */
-  font: 90% helvetica, arial, freesans, clean, sans-serif;
+.layout {
+  display: flex;
+  padding: 5px 15px;
 }
 
-/* column container */
-.colmask {
-  position: relative; /* This fixes the IE7 overflow hidden bug and stops the layout jumping out of place */
-  clear: both;
-  float: left;
-  width: 100%; /* width of whole page */
-  overflow: hidden; /* This chops off any overhanging divs */
-}
-.leftmenu .colright {
-  float: left;
-  width: 200%;
-  position: relative;
-  left: 200px;
-  background: #fff;
-}
-.leftmenu .col1wrap {
-  float: right;
-  width: 50%;
-  position: relative;
-  right: 200px;
-  padding-bottom: 1em;
-}
-
-.leftmenu .col1 {
-  margin: 0 15px 0 190px;
-  position: relative;
-  right: 100%;
+.menu {
+  font-size: 0.8rem;
+  flex-shrink: 0;
+  align-self: start;
+  width: 150px;
+  margin: 5px 15px 5px 0px;
   padding: 8px;
-}
-.leftmenu .col2 {
-  float: left;
-  width: 160px;
-  position: relative;
-  right: 185px;
+  border: 1px solid #cccccc;
+  background: #efefef;
 }
 
-.col1 a {
+.menu strong {
+  display: block;
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+
+.menu ul {
+  padding-left: 15px;
+  margin-top: 5px;
+}
+
+.menu a {
   color: #000000;
+  text-decoration: underline dotted;
+}
+
+.menu a:hover {
   text-decoration: underline;
 }
 
-.col2 a {
-  color: #000000;
-  text-decoration: none;
+.content {
+  flex-grow: 1;
 }
 
-.col2 a:hover {
-  border-bottom: 1px dotted #000;
-  text-decoration: none;
+.content a {
+  color: #000000;
+  text-decoration: underline;
 }
 
 h1 {
@@ -105,20 +94,4 @@ p {
 
 .bold {
   font-weight: bold;
-}
-
-.navwrapper {
-  margin-bottom: 15px;
-  margin-top: 5px;
-  border-color: #cccccc;
-  border-width: 1px;
-  border-style: solid;
-  width: 144px;
-  background: #efefef;
-  padding: 8px;
-}
-
-.nav {
-  padding-left: 15px;
-  margin-top: 5px;
 }
