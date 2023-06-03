@@ -1,68 +1,75 @@
 <!DOCTYPE html>
 <html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1" />
-<title>{{ page.title }}</title>
-<link rel="stylesheet" type="text/css" href="style.css" />
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1" />
+    <title>{{ page.title }}</title>
+    <link rel="stylesheet" type="text/css" href="style.css" />
 
-<!-- Google tag (gtag.js) -->
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-8C4E6TS4V7"></script>
-<script>
-  window.dataLayer = window.dataLayer || [];
-  function gtag(){dataLayer.push(arguments);}
-  gtag('js', new Date());
+    <!-- Google tag (gtag.js) -->
+    <script
+      async
+      src="https://www.googletagmanager.com/gtag/js?id=G-8C4E6TS4V7"
+    ></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag() {
+        dataLayer.push(arguments);
+      }
+      gtag("js", new Date());
 
-  gtag('config', 'G-8C4E6TS4V7');
-</script>
+      gtag("config", "G-8C4E6TS4V7");
+    </script>
+  </head>
 
-</head>
+  <body>
+    <div id="title">
+      <h1>Martin Hare Robertson</h1>
+    </div>
 
-<body>
-
-<div id="title">
-<h1>Martin Hare Robertson</h1>
-</div>
-
-<div class="colmask leftmenu">
-    <div class="colright">
+    <div class="colmask leftmenu">
+      <div class="colright">
         <div class="col1wrap">
-            <div class="col1">
-
-              {{ content }}
-
-            </div>
+          <div class="col1">{{ content }}</div>
         </div>
         <div class="col2">
-<div class="navwrapper">
-<a href="./">Home</a><br>
-<br>
-<strong>Open Source (2010 - 2014)</strong>
-<br>
-<ul class="nav">
-<li><a href="org.intrace/">InTrace</a>
-<li><a href="org.inmemprofiler/">InMemProfiler</a>
-<li><a href="javathreaddumpanalyser/">Java Thread Dump Analyser</a>
-<li><a href="jlta/">Java Live Thread Analyser</a>
-<li><a href="swtjar/">SWTJar</a>
-<li><a href="emmacheck/">EmmaCheck</a>
-<li><a href="jdeclipse-realign/">JDEclipse-Realign</a>
-<li><a href="codetrails/">Code Trails</a>
-<li><a href="jacoco/">jacoco</a>
-<li><a href="arduino-libs-manchester/">Arduino Manchester Encoding</a>
-</ul>
-<br>
-<strong>Blog Archive (last post in 2013)</strong>
-<br>
-<ul class="nav">
-<li><a href="http://mchr3k-arduino.blogspot.com/">Arduino Blog</a>
-<li><a href="http://mchr3k-coding.blogspot.co.uk/">Coding Blog</a>
-</ul>
-</div>
+          <div class="navwrapper">
+            <a href="./">Home</a><br />
+            <br />
+            <strong>Open Source (2010 - 2014)</strong>
+            <br />
+            <ul class="nav">
+              <li><a href="org.intrace/">InTrace</a></li>
+              <li><a href="org.inmemprofiler/">InMemProfiler</a></li>
+              <li>
+                <a href="javathreaddumpanalyser/">Java Thread Dump Analyser</a>
+              </li>
+              <li><a href="jlta/">Java Live Thread Analyser</a></li>
+              <li><a href="swtjar/">SWTJar</a></li>
+              <li><a href="emmacheck/">EmmaCheck</a></li>
+              <li><a href="jdeclipse-realign/">JDEclipse-Realign</a></li>
+              <li><a href="codetrails/">Code Trails</a></li>
+              <li><a href="jacoco/">jacoco</a></li>
+              <li>
+                <a href="arduino-libs-manchester/"
+                  >Arduino Manchester Encoding</a
+                >
+              </li>
+            </ul>
 
+            <br />
+            <strong>Blog Archive (last post in 2013)</strong>
+            <br />
+            <ul class="nav">
+              <li>
+                <a href="http://mchr3k-arduino.blogspot.com/">Arduino Blog</a>
+              </li>
+              <li>
+                <a href="http://mchr3k-coding.blogspot.co.uk/">Coding Blog</a>
+              </li>
+            </ul>
+          </div>
         </div>
+      </div>
     </div>
-</div>
-
-</body>
-
+  </body>
 </html>
