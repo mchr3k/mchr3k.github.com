@@ -3,20 +3,22 @@
 html,
 body {
   height: 100%;
+}
+body {
   background-color: #fff;
   /* Native Font Stack: https://www.smashingmagazine.com/2015/11/using-system-ui-fonts-practical-guide/ */
   font-family: -apple-system, BlinkMacSystemFont, “Segoe UI”, “Roboto”, “Oxygen”, “Ubuntu”, “Cantarell”, “Fira Sans”, “Droid Sans”, “Helvetica Neue”, sans-serif;
   /* The html and body elements cannot have any padding or margin. */
-  border-top: 15px solid #2067a7;
-  border-image: url("/static/img/climate-stripe-1850-2022.jpg") 15;
+  border-top: 30px solid #2067a7;
+  border-image: url("/static/img/climate-stripe-1850-2022.jpg") 1;
 }
 /* Wrapper for page content to push down footer */
 #wrap {
   padding-bottom: 50px;
   min-height: 100%;
   height: auto;
-  /* Negative indent footer by its height */
-  margin: 0 auto -65px;
+  /* Negative indent footer by footer height (61px) plus header border (30px) minus footer border (5px) */
+  margin: 0 auto -86px;
   /* Pad bottom by footer height */
   /*padding: 0 0 60px;*/
 }
@@ -104,8 +106,18 @@ body {
   max-width: 1000px;
   text-align: left;
 }
-.avatar {
+#footer .container {
+  margin-top: 20px;
+  border-top: 1px solid #ddd;
+}
+#about .avatar {
   text-align: center;
+}
+#about .avatar {
+  padding-top: 5%;
+}
+#about .avatar img {
+  max-width: 250px;
 }
 .container .text-muted {
   margin: 20px 0;
@@ -149,12 +161,6 @@ body {
 .social h4 > a {
   color: #000000;
 }
-.avatar {
-  padding-top: 5%;
-}
-.avatar img {
-  max-width: 250px;
-}
 .blog-post {
   padding-top: 15px;
 }
@@ -167,16 +173,31 @@ body {
 .page-not-found {
   padding-top: 20%;
 }
-
 .blogpost {
   text-align: left;
   line-height: 30px;
   font-size: 18px;
 }
-
 #about p {
   margin-top: 20px;
   font-size: 1.6rem;
+}
+.quote {
+  font-style: italic;
+}
+.flex {
+  display: flex;
+}
+.flex div img {
+  max-width: 100%;
+}
+.container img {
+  max-width: 60%;
+}
+@media (max-width: 800px) {
+  .container img {
+    max-width: 100%;
+  }
 }
 
 /* Footer 
@@ -190,7 +211,7 @@ body {
 }
 div.footer {
   border-bottom: 5px solid #2067a7;
-  border-image: url("/static/img/climate-stripe-1850-2022.jpg") 15;
+  border-image: url("/static/img/climate-stripe-1850-2022.jpg") 1;
 }
 /* Set the fixed height of the footer here */
 /*.footer {
