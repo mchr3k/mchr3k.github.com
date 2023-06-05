@@ -1,4 +1,4 @@
-/* Main page with stikky-footer
+/* Main page with sticky-footer
 -------------------------------------------------- */
 html,
 body {
@@ -6,11 +6,10 @@ body {
 }
 body {
   background-color: #fff;
-  /* Native Font Stack: https://www.smashingmagazine.com/2015/11/using-system-ui-fonts-practical-guide/ */
-  font-family: -apple-system, BlinkMacSystemFont, “Segoe UI”, “Roboto”, “Oxygen”, “Ubuntu”, “Cantarell”, “Fira Sans”, “Droid Sans”, “Helvetica Neue”, sans-serif;
-  /* The html and body elements cannot have any padding or margin. */
   border-top: 30px solid #2067a7;
   border-image: url("/static/img/climate-stripe-1850-2022.jpg") 1;
+  /* Native Font Stack: https://www.smashingmagazine.com/2015/11/using-system-ui-fonts-practical-guide/ */
+  font-family: -apple-system, BlinkMacSystemFont, “Segoe UI”, “Roboto”, “Oxygen”, “Ubuntu”, “Cantarell”, “Fira Sans”, “Droid Sans”, “Helvetica Neue”, sans-serif;
 }
 /* Wrapper for page content to push down footer */
 #wrap {
@@ -19,83 +18,24 @@ body {
   height: auto;
   /* Negative indent footer by footer height (61px) plus header border (30px) minus footer border (5px) */
   margin: 0 auto -86px;
-  /* Pad bottom by footer height */
-  /*padding: 0 0 60px;*/
 }
 
 /* Navbar
 -------------------------------------------------- */
 
-.navbar-static-top {
-  margin-bottom: 10px;
-}
 .navbar-default {
   background-color: #ffffff;
   border-color: #ffffff;
 }
-.navbar-default .navbar-brand {
-  color: #2067a7;
-}
+.navbar-default .navbar-brand,
 .navbar-default .navbar-brand:hover,
 .navbar-default .navbar-brand:focus {
   color: #2067a7;
 }
-.navbar-default .navbar-text {
-  color: #2067a7;
-}
-.navbar-default .navbar-nav > li > a {
-  color: #2067a7;
-}
+.navbar-default .navbar-nav > li > a,
 .navbar-default .navbar-nav > li > a:hover,
 .navbar-default .navbar-nav > li > a:focus {
   color: #2067a7;
-}
-.navbar-default .navbar-nav > .active > a,
-.navbar-default .navbar-nav > .active > a:hover,
-.navbar-default .navbar-nav > .active > a:focus {
-  color: #2067a7;
-  background-color: #ffffff;
-}
-.navbar-default .navbar-nav > .open > a,
-.navbar-default .navbar-nav > .open > a:hover,
-.navbar-default .navbar-nav > .open > a:focus {
-  color: #2067a7;
-  background-color: #ffffff;
-}
-.navbar-default .navbar-toggle {
-  border-color: #ffffff;
-}
-.navbar-default .navbar-toggle:hover,
-.navbar-default .navbar-toggle:focus {
-  background-color: #ffffff;
-}
-.navbar-default .navbar-toggle .icon-bar {
-  background-color: #2067a7;
-}
-.navbar-default .navbar-collapse,
-.navbar-default .navbar-form {
-  border-color: #2067a7;
-}
-.navbar-default .navbar-link {
-  color: #2067a7;
-}
-.navbar-default .navbar-link:hover {
-  color: #2067a7;
-}
-@media (max-width: 767px) {
-  .navbar-default .navbar-nav .open .dropdown-menu > li > a {
-    color: #2067a7;
-  }
-  .navbar-default .navbar-nav .open .dropdown-menu > li > a:hover,
-  .navbar-default .navbar-nav .open .dropdown-menu > li > a:focus {
-    color: #2067a7;
-  }
-  .navbar-default .navbar-nav .open .dropdown-menu > .active > a,
-  .navbar-default .navbar-nav .open .dropdown-menu > .active > a:hover,
-  .navbar-default .navbar-nav .open .dropdown-menu > .active > a:focus {
-    color: #2067a7;
-    background-color: #ffffff;
-  }
 }
 
 /* Custom page CSS
@@ -119,6 +59,10 @@ body {
 #about .avatar img {
   max-width: 250px;
 }
+#about p {
+  margin-top: 20px;
+  font-size: 1.6rem;
+}
 .container .text-muted {
   margin: 20px 0;
 }
@@ -128,31 +72,6 @@ body {
 .container a:hover {
   color: #133e64;
 }
-.img-responsive {
-  display: block;
-  height: auto;
-  max-width: 100%;
-}
-.panel-default h4 {
-  text-align: left;
-  line-height: 24px;
-  font-size: 22px;
-}
-.panel-default h5 {
-  text-align: left;
-  line-height: 30px;
-  font-size: 18px;
-}
-.panel-default h6 {
-  font-size: 15px;
-}
-.panel {
-  border-style: none;
-}
-.panel-body {
-  padding-top: -10px;
-  text-align: left;
-}
 .social {
   padding-top: 12px;
   word-spacing: 25px;
@@ -161,26 +80,8 @@ body {
 .social h4 > a {
   color: #000000;
 }
-.blog-post {
-  padding-top: 15px;
-}
-.blog-title {
-  padding-top: 2px;
-}
-.related-posts h4 {
-  text-align: center;
-}
 .page-not-found {
   padding-top: 20%;
-}
-.blogpost {
-  text-align: left;
-  line-height: 30px;
-  font-size: 18px;
-}
-#about p {
-  margin-top: 20px;
-  font-size: 1.6rem;
 }
 .quote {
   font-style: italic;
@@ -213,9 +114,3 @@ div.footer {
   border-bottom: 5px solid #2067a7;
   border-image: url("/static/img/climate-stripe-1850-2022.jpg") 1;
 }
-/* Set the fixed height of the footer here */
-/*.footer {
-  height: 50px;
-  padding-bottom: 15px;
-  
-}*/
