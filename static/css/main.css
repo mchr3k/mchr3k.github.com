@@ -6,18 +6,33 @@ body {
 }
 body {
   background-color: #fff;
-  border-top: 30px solid #2067a7;
-  border-image: url("/static/img/climate-stripe-1850-2022.jpg") 1;
   /* Native Font Stack: https://www.smashingmagazine.com/2015/11/using-system-ui-fonts-practical-guide/ */
   font-family: -apple-system, BlinkMacSystemFont, “Segoe UI”, “Roboto”, “Oxygen”, “Ubuntu”, “Cantarell”, “Fira Sans”, “Droid Sans”, “Helvetica Neue”, sans-serif;
+
+  /* https://stackoverflow.com/questions/69212377/push-footer-to-the-bottom-of-a-short-page */
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
-/* Wrapper for page content to push down footer */
-#wrap {
-  padding-bottom: 50px;
-  min-height: 100%;
-  height: auto;
-  /* Negative indent footer by footer height (61px) plus header border (30px) minus footer border (5px) */
-  margin: 0 auto -86px;
+#header {
+  border-top: 30px solid #2067a7;
+  border-left: 0px;
+  border-right: 0px;
+  border-bottom: 0px;
+  border-image: url("/static/img/climate-stripe-1850-2022.jpg") 1 0 0 0;
+  min-height: auto;
+}
+footer {
+  margin-top: auto;
+  border-bottom: 5px solid #2067a7;
+  border-image: url("/static/img/climate-stripe-1850-2022.jpg") 1;
+  text-decoration: none !important;
+}
+.text-muted {
+  color: #6b6b6b;
 }
 
 /* Navbar
@@ -54,7 +69,7 @@ body {
   text-align: center;
 }
 #about .avatar {
-  padding-top: 5%;
+  padding-top: 10px;
 }
 #about .avatar img {
   max-width: 250px;
@@ -99,18 +114,4 @@ body {
   .container img {
     max-width: 100%;
   }
-}
-
-/* Footer 
--------------------------------------------------- */
-
-.footer {
-  text-decoration: none !important;
-}
-.text-muted {
-  color: #6b6b6b;
-}
-div.footer {
-  border-bottom: 5px solid #2067a7;
-  border-image: url("/static/img/climate-stripe-1850-2022.jpg") 1;
 }

@@ -29,14 +29,9 @@
     <!-- Google Analytics -->
     {% include analytics.html %}
   </head>
-  <!-- Main Body-->
   <body>
-    <!-- Wrap all page content here -->
-    <div id="wrap">
-      <!-- Navbar header -->
-      {% include header.html %} {{ content }}
-    </div>
-    <!-- Footer -->
+    {% include header.html %}
+    <main>{{ content }}</main>
     {% include footer.html %}
   </body>
 </html>
