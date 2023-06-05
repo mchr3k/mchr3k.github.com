@@ -1,1 +1,23 @@
-auto: true
+# top level stuff you probably don't need to touch
+highlighter: rouge
+markdown: kramdown
+rdiscount:
+  extensions: [smart]
+permalink: /:title.html
+paginate: 5
+plugins: [jekyll-paginate]
+port: 3000
+safe: true
+
+# edit here to achieve your personal greatness
+url: http://mchr3k.github.io/
+baseurl: /
+sourceurl: https://github.com/mchr3k/mchr3k.github.com
+title: Martin Hare Robertson
+author: Martin Hare Robertson
+description: Personal website
+avatar: profile.jpg
+email: mchr3k@gmail.com
+github: mchr3k
+linkedin: martin-hare-robertson-b8802019
+google_analytics: G-8C4E6TS4V7
