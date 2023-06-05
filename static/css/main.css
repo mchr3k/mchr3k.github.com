@@ -5,11 +5,9 @@ body {
   height: 100%;
   background-color: #fff;
   /* Native Font Stack: https://www.smashingmagazine.com/2015/11/using-system-ui-fonts-practical-guide/ */
-  font-family: -apple-system, BlinkMacSystemFont, “Segoe UI”, “Roboto”, “Oxygen”,
-    “Ubuntu”, “Cantarell”, “Fira Sans”, “Droid Sans”, “Helvetica Neue”,
-    sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, “Segoe UI”, “Roboto”, “Oxygen”, “Ubuntu”, “Cantarell”, “Fira Sans”, “Droid Sans”, “Helvetica Neue”, sans-serif;
   /* The html and body elements cannot have any padding or margin. */
-  border-top: 15px solid #153067;
+  border-top: 15px solid #2067a7;
   border-image: url("/static/img/climate-stripe-1850-2022.jpg") 15;
 }
 /* Wrapper for page content to push down footer */
@@ -34,32 +32,32 @@ body {
   border-color: #ffffff;
 }
 .navbar-default .navbar-brand {
-  color: #6b6b6b;
+  color: #2067a7;
 }
 .navbar-default .navbar-brand:hover,
 .navbar-default .navbar-brand:focus {
-  color: #6b6b6b;
+  color: #2067a7;
 }
 .navbar-default .navbar-text {
-  color: #6b6b6b;
+  color: #2067a7;
 }
 .navbar-default .navbar-nav > li > a {
-  color: #6b6b6b;
+  color: #2067a7;
 }
 .navbar-default .navbar-nav > li > a:hover,
 .navbar-default .navbar-nav > li > a:focus {
-  color: #6b6b6b;
+  color: #2067a7;
 }
 .navbar-default .navbar-nav > .active > a,
 .navbar-default .navbar-nav > .active > a:hover,
 .navbar-default .navbar-nav > .active > a:focus {
-  color: #6b6b6b;
+  color: #2067a7;
   background-color: #ffffff;
 }
 .navbar-default .navbar-nav > .open > a,
 .navbar-default .navbar-nav > .open > a:hover,
 .navbar-default .navbar-nav > .open > a:focus {
-  color: #6b6b6b;
+  color: #2067a7;
   background-color: #ffffff;
 }
 .navbar-default .navbar-toggle {
@@ -70,30 +68,30 @@ body {
   background-color: #ffffff;
 }
 .navbar-default .navbar-toggle .icon-bar {
-  background-color: #6b6b6b;
+  background-color: #2067a7;
 }
 .navbar-default .navbar-collapse,
 .navbar-default .navbar-form {
-  border-color: #6b6b6b;
+  border-color: #2067a7;
 }
 .navbar-default .navbar-link {
-  color: #6b6b6b;
+  color: #2067a7;
 }
 .navbar-default .navbar-link:hover {
-  color: #6b6b6b;
+  color: #2067a7;
 }
 @media (max-width: 767px) {
   .navbar-default .navbar-nav .open .dropdown-menu > li > a {
-    color: #6b6b6b;
+    color: #2067a7;
   }
   .navbar-default .navbar-nav .open .dropdown-menu > li > a:hover,
   .navbar-default .navbar-nav .open .dropdown-menu > li > a:focus {
-    color: #6b6b6b;
+    color: #2067a7;
   }
   .navbar-default .navbar-nav .open .dropdown-menu > .active > a,
   .navbar-default .navbar-nav .open .dropdown-menu > .active > a:hover,
   .navbar-default .navbar-nav .open .dropdown-menu > .active > a:focus {
-    color: #6b6b6b;
+    color: #2067a7;
     background-color: #ffffff;
   }
 }
@@ -113,10 +111,10 @@ body {
   margin: 20px 0;
 }
 .container a {
-  color: #27a822;
+  color: #2067a7;
 }
 .container a:hover {
-  color: #267723;
+  color: #133e64;
 }
 .img-responsive {
   display: block;
@@ -135,14 +133,6 @@ body {
 }
 .panel-default h6 {
   font-size: 15px;
-}
-.panel-default h4 a,
-h5 a {
-  color: #27a822;
-}
-.panel-default h4 a:hover,
-h5 a:hover {
-  color: #267723;
 }
 .panel {
   border-style: none;
@@ -199,7 +189,7 @@ h5 a:hover {
   color: #6b6b6b;
 }
 div.footer {
-  border-bottom: 5px solid #153067;
+  border-bottom: 5px solid #2067a7;
   border-image: url("/static/img/climate-stripe-1850-2022.jpg") 15;
 }
 /* Set the fixed height of the footer here */
