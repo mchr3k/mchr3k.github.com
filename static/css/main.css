@@ -61,7 +61,7 @@ footer {
   max-width: 1000px;
   text-align: left;
 }
-#footer .container {
+footer .container {
   margin-top: 20px;
   border-top: 1px solid #ddd;
 }
