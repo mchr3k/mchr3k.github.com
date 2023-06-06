@@ -17,7 +17,7 @@ body {
   display: flex;
   flex-direction: column;
 }
-#header {
+header {
   border-top: 30px solid #2067a7;
   border-left: 0px;
   border-right: 0px;
@@ -35,22 +35,151 @@ footer {
   color: #6b6b6b;
 }
 
-/* Navbar
+/* https://janessagarrow.com/blog/pure-css-hamburger-menu/
 -------------------------------------------------- */
-
-.navbar-default {
+header .container {
+  display: flex;
+  justify-content: left;
+  align-items: center;
+  width: 100%;
   background-color: #ffffff;
-  border-color: #ffffff;
 }
-.navbar-default .navbar-brand,
-.navbar-default .navbar-brand:hover,
-.navbar-default .navbar-brand:focus {
-  color: #2067a7;
+
+.header-brand {
+  font-size: 18px;
+  line-height: 20px;
+  padding: 15px 15px 15px 0px;
+  margin-right: auto;
 }
-.navbar-default .navbar-nav > li > a,
-.navbar-default .navbar-nav > li > a:hover,
-.navbar-default .navbar-nav > li > a:focus {
-  color: #2067a7;
+
+header a {
+  text-decoration: none;
+}
+
+/* "Hide" checkbox -- moves it off screen*/
+#menu-btn {
+  position: absolute;
+  top: -100%;
+  left: -100%;
+}
+
+/* Hide hamburger for bigger screens */
+.menu-icon {
+  visibility: hidden;
+}
+
+.menu {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-right: -15px;
+}
+
+.menu a {
+  padding: 15px;
+}
+
+@media screen and (max-width: 800px) {
+  header .container {
+    display: grid;
+    grid-template-areas:
+      "title   title   hamburger"
+      "nav     nav     nav";
+    justify-content: stretch;
+  }
+
+  .header-brand {
+    grid-area: title;
+  }
+
+  .menu a {
+    text-decoration: none;
+    color: black;
+  }
+
+  .menu-btn {
+    display: none;
+  }
+
+  .menu-icon {
+    grid-area: hamburger;
+    cursor: pointer;
+    display: flex;
+    justify-content: flex-end;
+    align-items: baseline;
+    padding: 15px 0;
+    position: relative;
+    user-select: none;
+    visibility: visible;
+  }
+
+  .navicon {
+    background: #333;
+    display: block;
+    height: 2px;
+    width: 18px;
+    position: relative;
+  }
+
+  .navicon:before {
+    top: 5px;
+  }
+
+  .navicon:after {
+    top: -5px;
+  }
+
+  .navicon:before,
+  .navicon:after {
+    background: #333;
+    display: block;
+    width: 100%;
+    height: 100%;
+    content: "";
+    position: absolute;
+    transition: all 0.2s ease-out;
+  }
+
+  .menu {
+    grid-area: nav;
+    max-width: unset;
+    max-height: 0;
+    transition: max-height 0.2s ease-out;
+    overflow: hidden;
+    margin: 0;
+    padding: 0;
+    background-color: #fff;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .menu a {
+    color: #2067a7;
+    padding: 10px 0;
+    width: 100%;
+    text-align: right;
+  }
+
+  .menu-btn:checked ~ .menu {
+    max-height: 240px;
+  }
+
+  .menu-btn:checked ~ .menu-icon .navicon {
+    background: transparent;
+  }
+
+  .menu-btn:checked ~ .menu-icon .navicon:before {
+    transform: rotate(-45deg);
+  }
+
+  .menu-btn:checked ~ .menu-icon .navicon:after {
+    transform: rotate(45deg);
+  }
+
+  .menu-btn:checked ~ .menu-icon .navicon:before,
+  .menu-btn:checked ~ .menu-icon .navicon:after {
+    top: 0;
+  }
 }
 
 /* Custom page CSS
