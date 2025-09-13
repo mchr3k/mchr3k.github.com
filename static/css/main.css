@@ -22,13 +22,13 @@ header {
   border-left: 0px;
   border-right: 0px;
   border-bottom: 0px;
-  border-image: url("/static/img/climate-stripe-1850-2024.jpg") 1 0 0 0;
+  border-image: url("/static/img/climate-stripe-1850-2024.png") 1 0 0 0;
   min-height: auto;
 }
 footer {
   margin-top: auto;
   border-bottom: 5px solid #2067a7;
-  border-image: url("/static/img/climate-stripe-1850-2024.jpg") 1;
+  border-image: url("/static/img/climate-stripe-1850-2024.png") 1;
   text-decoration: none !important;
 }
 .text-muted {
