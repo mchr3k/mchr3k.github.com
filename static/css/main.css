@@ -7,7 +7,8 @@ body {
 body {
   background-color: #fff;
   /* Native Font Stack: https://www.smashingmagazine.com/2015/11/using-system-ui-fonts-practical-guide/ */
-  font-family: -apple-system, BlinkMacSystemFont, “Segoe UI”, “Roboto”, “Oxygen”, “Ubuntu”, “Cantarell”, “Fira Sans”, “Droid Sans”, “Helvetica Neue”, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, “Segoe UI”, “Roboto”, “Oxygen”, “Ubuntu”, “Cantarell”, “Fira Sans”,
+    “Droid Sans”, “Helvetica Neue”, sans-serif;
 
   /* https://stackoverflow.com/questions/69212377/push-footer-to-the-bottom-of-a-short-page */
   margin: 0;
@@ -79,7 +80,7 @@ header a {
   padding: 15px;
 }
 
-@media screen and (max-width: 800px) {
+@media screen and (max-width: 1000px) {
   header .container {
     display: grid;
     grid-template-areas:
@@ -239,7 +240,7 @@ footer .container {
 .container img {
   max-width: 60%;
 }
-@media (max-width: 800px) {
+@media (max-width: 1000px) {
   .container img {
     max-width: 100%;
   }
