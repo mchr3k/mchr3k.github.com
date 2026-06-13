@@ -298,6 +298,22 @@ kbd {
   border-radius: 6px;
   min-height: 32px;
 }
+.wall-buttons.nested {
+  margin: 8px 0 0;
+}
+.wall-buttons.nested button {
+  font-size: 11px;
+  padding: 5px 6px;
+  min-height: 0;
+}
+.walls-list.nested {
+  margin: 8px 0 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--accent-soft);
+}
+.walls-list.nested .wall-item {
+  background: #fafbfc;
+}
 
 .contents-list {
   list-style: none;

@@ -4,10 +4,12 @@
  * Units: everything is stored internally in centimetres (cm). Rooms are
  * created from a metres input for convenience, but all edges read/write cm.
  *
- * Shapes are modelled as axis-aligned rectangles today (width `w`, height `h`),
- * but rendering and edge editing go through a small "geometry" layer
- * (localCorners / edgesOf) so the model can grow to rectilinear polygons with
- * cut-outs (chimney breasts, bay windows) later without rewriting the canvas.
+ * Rooms and objects are axis-aligned rectangles; rooms may also carry "notches"
+ * — rectangular cut-ins (recesses, e.g. chimney breasts) and cut-outs
+ * (protrusions, e.g. bay windows) attached to a wall, nestable to any depth.
+ * Rendering and edge editing go through a small geometry layer (itemLocalGeometry
+ * / walkEdge) that emits a rectilinear polygon whose every edge carries a setter,
+ * so all edge lengths stay directly editable in cm.
  */
 
 (() => {
@@ -89,16 +91,17 @@
   // that maps an edited cm length back to the parameter that drives it, so all
   // edges remain directly editable.
   //
-  // A notch = { id, side:'top'|'right'|'bottom'|'left', pos, width, depth }.
-  //   pos    = distance (cm) along the wall from its start corner to the notch.
-  //   width  = length (cm) of the notch along the wall.
-  //   depth  = signed cm; > 0 protrudes outward (bay window),
-  //            < 0 cuts inward (chimney breast).
+  // A notch = { id, side?, pos, width, depth, children:[] }.
+  //   side   = which base wall ('top'|'right'|'bottom'|'left'); top-level only.
+  //   pos    = distance (cm) along the parent edge from its start to the notch.
+  //   width  = length (cm) of the notch along the parent edge.
+  //   depth  = signed cm; > 0 cuts out (protrudes), < 0 cuts in (recesses).
+  //   children = notches sitting on this notch's face (nestable to any depth).
   const SIDES = {
-    top: { start: (it) => [0, 0], dir: [1, 0], out: [0, -1], len: (it) => it.w, base: "w" },
-    right: { start: (it) => [it.w, 0], dir: [0, 1], out: [1, 0], len: (it) => it.h, base: "h" },
-    bottom: { start: (it) => [it.w, it.h], dir: [-1, 0], out: [0, 1], len: (it) => it.w, base: "w" },
-    left: { start: (it) => [0, it.h], dir: [0, -1], out: [-1, 0], len: (it) => it.h, base: "h" },
+    top: { start: (it) => [0, 0], dir: [1, 0], len: (it) => it.w, base: "w" },
+    right: { start: (it) => [it.w, 0], dir: [0, 1], len: (it) => it.h, base: "h" },
+    bottom: { start: (it) => [it.w, it.h], dir: [-1, 0], len: (it) => it.w, base: "w" },
+    left: { start: (it) => [0, it.h], dir: [0, -1], len: (it) => it.h, base: "h" },
   };
 
   // Apply an edited length to a stored numeric field using the change in length
@@ -113,9 +116,63 @@
     n.depth = (n.depth < 0 ? -1 : 1) * mag;
   };
 
+  // Deep-copy a notch (with fresh ids) for duplication.
+  const cloneNotch = (n) => ({
+    ...n,
+    id: uid("n"),
+    children: (n.children || []).map(cloneNotch),
+  });
+
+  // Walk one straight edge of length `length` from `start` in unit direction
+  // `dir`, inserting `notches` along it and returning the resulting chain of
+  // edges. Because the polygon is traced with its interior on the right, the
+  // exterior ("outward") is the left perpendicular of travel — and a notch's
+  // face is just another edge walked the same way, so nesting is recursive.
+  // `baseCtl` edits the leftover (un-notched) portion of this edge.
+  function walkEdge(start, dir, length, notches, baseCtl) {
+    const out = [dir[1], -dir[0]]; // left perpendicular = outward
+    const at = (d) => [start[0] + dir[0] * d, start[1] + dir[1] * d];
+    const edges = [];
+    let cur = start;
+    let along = 0;
+
+    const here = (notches || [])
+      .map((n) => {
+        const width = Math.min(Math.max(1, n.width), length);
+        const pos = Math.min(Math.max(0, n.pos), length - width);
+        return { n, pos, width };
+      })
+      .sort((a, b) => a.pos - b.pos);
+
+    for (const { n, pos, width } of here) {
+      if (pos > along + 0.01) {
+        const p = at(pos);
+        edges.push({ a: cur, b: p, len: pos - along, ctl: setNotchPos(n) });
+        cur = p;
+        along = pos;
+      }
+      const pa = [cur[0] + out[0] * n.depth, cur[1] + out[1] * n.depth];
+      const faceEnd = at(pos + width);
+      const pb = [faceEnd[0] + out[0] * n.depth, faceEnd[1] + out[1] * n.depth];
+      edges.push({ a: cur, b: pa, len: Math.abs(n.depth), ctl: setNotchDepth(n) });
+      // The face runs pa -> pb in the same direction; recurse for any children.
+      if (n.children && n.children.length) {
+        edges.push(...walkEdge(pa, dir, width, n.children, setNotchWidth(n)));
+      } else {
+        edges.push({ a: pa, b: pb, len: width, ctl: setNotchWidth(n) });
+      }
+      edges.push({ a: pb, b: faceEnd, len: Math.abs(n.depth), ctl: setNotchDepth(n) });
+      cur = faceEnd;
+      along = pos + width;
+    }
+    if (along < length - 0.01) {
+      edges.push({ a: cur, b: at(length), len: length - along, ctl: baseCtl });
+    }
+    return edges;
+  }
+
   function itemLocalGeometry(item) {
     const notches = (item.notches || []).filter((n) => SIDES[n.side]);
-    const setBase = (item, base) => (base === "w" ? setW(item) : setH(item));
 
     if (!notches.length) {
       const c = [[0, 0], [item.w, 0], [item.w, item.h], [0, item.h]];
@@ -131,47 +188,11 @@
     }
 
     const edges = [];
-    let cur = [0, 0]; // walk start = top-left corner
     for (const side of ["top", "right", "bottom", "left"]) {
       const S = SIDES[side];
-      const sideLen = S.len(item);
-      const startPt = S.start(item);
-      const dir = S.dir;
-      const out = S.out;
-      const endCorner = [startPt[0] + dir[0] * sideLen, startPt[1] + dir[1] * sideLen];
-      const at = (d) => [startPt[0] + dir[0] * d, startPt[1] + dir[1] * d];
-
-      // notches on this wall, clamped so they fit, ordered along the wall
-      const here = notches
-        .filter((n) => n.side === side)
-        .map((n) => {
-          const width = Math.min(Math.max(1, n.width), sideLen);
-          const pos = Math.min(Math.max(0, n.pos), sideLen - width);
-          return { n, pos, width };
-        })
-        .sort((a, b) => a.pos - b.pos);
-
-      let along = 0;
-      for (const { n, pos, width } of here) {
-        if (pos > along + 0.01) {
-          const p = at(pos);
-          edges.push({ a: cur, b: p, len: pos - along, ctl: setNotchPos(n) });
-          cur = p;
-          along = pos;
-        }
-        const pa = [cur[0] + out[0] * n.depth, cur[1] + out[1] * n.depth];
-        const faceEnd = at(pos + width);
-        const pb = [faceEnd[0] + out[0] * n.depth, faceEnd[1] + out[1] * n.depth];
-        edges.push({ a: cur, b: pa, len: Math.abs(n.depth), ctl: setNotchDepth(n) });
-        edges.push({ a: pa, b: pb, len: width, ctl: setNotchWidth(n) });
-        edges.push({ a: pb, b: faceEnd, len: Math.abs(n.depth), ctl: setNotchDepth(n) });
-        cur = faceEnd;
-        along = pos + width;
-      }
-      if (along < sideLen - 0.01) {
-        edges.push({ a: cur, b: endCorner, len: sideLen - along, ctl: setBase(item, S.base) });
-      }
-      cur = endCorner;
+      const baseCtl = S.base === "w" ? setW(item) : setH(item);
+      const onSide = notches.filter((n) => n.side === side);
+      edges.push(...walkEdge(S.start(item), S.dir, S.len(item), onSide, baseCtl));
     }
     return { points: edges.map((e) => e.a), edges };
   }
@@ -663,44 +684,68 @@
       list.appendChild(li);
       return;
     }
-    for (const n of notches) {
-      const li = document.createElement("li");
-      li.className = "wall-item";
-      const kind = n.depth < 0 ? "Chimney breast (inset)" : "Bay window (outset)";
+    for (const n of notches) list.appendChild(notchItem(room, n, notches, true));
+  }
 
-      const head = document.createElement("div");
-      head.className = "wall-item-head";
-      const kindEl = document.createElement("span");
-      kindEl.className = "kind";
-      kindEl.textContent = kind;
-      const del = document.createElement("button");
-      del.type = "button";
-      del.textContent = "Remove";
-      del.addEventListener("click", () => {
-        room.notches = room.notches.filter((x) => x.id !== n.id);
-        save();
-        render();
-        refreshPanel();
-      });
-      head.append(kindEl, del);
+  // Recursively render one notch (and its children) as an editable card.
+  // `siblings` is the array the notch lives in, so it can remove itself.
+  function notchItem(room, n, siblings, isTop) {
+    const li = document.createElement("li");
+    li.className = "wall-item";
 
-      const grid = document.createElement("div");
-      grid.className = "wall-grid";
-      grid.append(
-        notchField(room, n, "side", "Wall", "select"),
-        notchField(room, n, "pos", "Position (cm)", "number"),
-        notchField(room, n, "width", "Width (cm)", "number"),
-        notchField(room, n, "depth", "Depth (cm)", "number")
-      );
+    const head = document.createElement("div");
+    head.className = "wall-item-head";
+    const kindEl = document.createElement("span");
+    kindEl.className = "kind";
+    kindEl.textContent = n.depth < 0 ? "Cut in" : "Cut out";
+    const del = document.createElement("button");
+    del.type = "button";
+    del.textContent = "Remove";
+    del.addEventListener("click", () => {
+      const i = siblings.indexOf(n);
+      if (i >= 0) siblings.splice(i, 1);
+      save();
+      render();
+      refreshPanel();
+    });
+    head.append(kindEl, del);
 
-      li.append(head, grid);
-      list.appendChild(li);
+    const grid = document.createElement("div");
+    grid.className = "wall-grid";
+    if (isTop) grid.append(notchField(n, "side", "Wall", "select"));
+    grid.append(
+      notchField(n, "pos", "Position (cm)", "number"),
+      notchField(n, "width", "Width (cm)", "number"),
+      notchField(n, "depth", "Depth (cm)", "number")
+    );
+
+    // Nested cut in / cut out, placed along this notch's face.
+    const nest = document.createElement("div");
+    nest.className = "wall-buttons nested";
+    const bIn = document.createElement("button");
+    bIn.type = "button";
+    bIn.textContent = "+ Cut in";
+    bIn.addEventListener("click", () => addNotch("inset", n));
+    const bOut = document.createElement("button");
+    bOut.type = "button";
+    bOut.textContent = "+ Cut out";
+    bOut.addEventListener("click", () => addNotch("outset", n));
+    nest.append(bIn, bOut);
+
+    li.append(head, grid, nest);
+
+    if (n.children && n.children.length) {
+      const childList = document.createElement("ul");
+      childList.className = "walls-list nested";
+      for (const c of n.children) childList.appendChild(notchItem(room, c, n.children, false));
+      li.appendChild(childList);
     }
+    return li;
   }
 
   // Build one labelled control for a notch property. Depth is shown as a
-  // positive magnitude; its inset/outset direction is preserved on edit.
-  function notchField(room, n, key, label, type) {
+  // positive magnitude; its cut-in/cut-out direction is preserved on edit.
+  function notchField(n, key, label, type) {
     const wrapEl = document.createElement("label");
     const span = document.createElement("span");
     span.textContent = label;
@@ -739,21 +784,25 @@
     return wrapEl;
   }
 
-  function addNotch(kind) {
+  // Add a notch. With no `parent`, it goes on the room's top wall; with a
+  // parent, it nests on that notch's face (centred, sized to fit).
+  function addNotch(kind, parent) {
     const r = resolveSel();
     if (!r || r.kind !== "room") return;
-    const room = r.room;
-    if (!room.notches) room.notches = [];
-    // sensible default: centred on the top wall
-    const width = Math.min(80, Math.max(20, Math.round(room.w * 0.25)));
+    const host = parent || r.room;
+    const span = parent ? parent.width : r.room.w;
+    if (!parent && !r.room.notches) r.room.notches = [];
+    if (parent && !parent.children) parent.children = [];
+    const width = Math.max(10, Math.min(Math.round(span * 0.4), span - 2));
     const notch = {
       id: uid("n"),
-      side: "top",
-      pos: Math.max(0, Math.round(room.w / 2 - width / 2)),
+      pos: Math.max(0, Math.round(span / 2 - width / 2)),
       width,
       depth: kind === "outset" ? 40 : -40,
+      children: [],
     };
-    room.notches.push(notch);
+    if (!parent) notch.side = "top";
+    (parent ? parent.children : r.room.notches).push(notch);
     save();
     render();
     refreshPanel();
@@ -898,7 +947,7 @@
         name: r.room.name + " copy",
         x: r.room.x + 30,
         y: r.room.y + 30,
-        notches: (r.room.notches || []).map((n) => ({ ...n, id: uid("n") })),
+        notches: (r.room.notches || []).map(cloneNotch),
         objects: r.room.objects.map((o) => ({ ...o, id: uid("o") })),
       };
       state.rooms.push(clone);
@@ -953,7 +1002,7 @@
       rooms: layout.rooms.map((r) => ({
         ...r,
         id: uid("r"),
-        notches: (r.notches || []).map((n) => ({ ...n, id: uid("n") })),
+        notches: (r.notches || []).map(cloneNotch),
         objects: r.objects.map((o) => ({ ...o, id: uid("o") })),
       })),
     };
@@ -1074,6 +1123,20 @@
     reader.readAsText(file);
   }
 
+  // Normalise a notch (recursively, including nested children). Only top-level
+  // notches carry a `side`; nested ones sit on their parent's face.
+  function normalizeNotch(n, isTop) {
+    const out = {
+      id: n.id || uid("n"),
+      pos: Math.max(0, +n.pos || 0),
+      width: Math.max(1, +n.width || 50),
+      depth: +n.depth || -40,
+      children: (n.children || []).map((c) => normalizeNotch(c, false)),
+    };
+    if (isTop) out.side = ["top", "right", "bottom", "left"].includes(n.side) ? n.side : "top";
+    return out;
+  }
+
   function normalizeRoom(r) {
     return {
       id: r.id || uid("r"),
@@ -1085,13 +1148,7 @@
       color: r.color || "#c7d2fe",
       notches: (r.notches || [])
         .filter((n) => ["top", "right", "bottom", "left"].includes(n.side))
-        .map((n) => ({
-          id: n.id || uid("n"),
-          side: n.side,
-          pos: Math.max(0, +n.pos || 0),
-          width: Math.max(1, +n.width || 50),
-          depth: +n.depth || -40,
-        })),
+        .map((n) => normalizeNotch(n, true)),
       objects: (r.objects || []).map((o) => ({
         id: o.id || uid("o"),
         name: o.name || "Object",
