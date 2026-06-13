@@ -445,6 +445,15 @@
   svg.addEventListener("pointercancel", onPointerUp);
 
   function onPointerDown(e) {
+    // iOS Safari can drop a pointerup/pointercancel, leaving a stale pointer in
+    // the map; the next touch then looks like a second finger and triggers a
+    // false pinch-zoom. A *primary* pointerdown is the first finger of a fresh
+    // gesture, so anything left over is stale — start from a clean slate.
+    if (e.isPrimary) {
+      pointers.clear();
+      pinch = null;
+      drag = null;
+    }
     pointers.set(e.pointerId, mousePos(e));
 
     // Two fingers -> pinch zoom / pan; cancel any single-item drag.
@@ -463,7 +472,7 @@
     }
 
     const target = e.target.closest("[data-kind]");
-    svg.setPointerCapture(e.pointerId);
+    try { svg.setPointerCapture(e.pointerId); } catch (_) {}
 
     if (!target || target.getAttribute("data-kind") === undefined) {
       startPan(e);
