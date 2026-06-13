@@ -1084,7 +1084,7 @@
   // ---------------------------------------------------------------------------
   function serialize() {
     return JSON.stringify(
-      { version: SCHEMA_VERSION, activeId: doc.activeId, view, layouts: doc.layouts },
+      { version: SCHEMA_VERSION, updatedAt: doc.updatedAt || Date.now(), activeId: doc.activeId, view, layouts: doc.layouts },
       null,
       2
     );
@@ -1176,7 +1176,21 @@
       layouts = [{ id: uid("l"), name: "Layout 1", rooms: (data.rooms || []).map(normalizeRoom) }];
     }
     const activeId = layouts.some((l) => l.id === data.activeId) ? data.activeId : layouts[0].id;
-    return { version: SCHEMA_VERSION, activeId, layouts };
+    return { version: SCHEMA_VERSION, updatedAt: +data.updatedAt || Date.now(), activeId, layouts };
+  }
+
+  // Replace the whole document with one pulled from Drive, without bumping the
+  // timestamp or re-triggering a sync (that would fight the newest-wins logic).
+  function applyRemoteDoc(remoteDoc) {
+    suppressSync = true;
+    doc = remoteDoc;
+    state = activeLayout();
+    selection = null;
+    try { localStorage.setItem(STORAGE_KEY, serialize()); } catch (_) {}
+    suppressSync = false;
+    renderLayoutBar();
+    render();
+    refreshPanel();
   }
 
   function activeLayout() {
@@ -1184,10 +1198,13 @@
   }
 
   let saveTimer = null;
+  let suppressSync = false; // true while applying a remote doc, to avoid loops
   function save() {
+    if (!suppressSync) doc.updatedAt = Date.now();
     try {
       localStorage.setItem(STORAGE_KEY, serialize());
     } catch (_) {}
+    if (!suppressSync) DRIVE.scheduleSync();
   }
   function saveSoon() {
     clearTimeout(saveTimer);
@@ -1208,6 +1225,7 @@
     const layoutId = uid("l");
     return {
       version: SCHEMA_VERSION,
+      updatedAt: Date.now(),
       activeId: layoutId,
       layouts: [
         {
@@ -1233,6 +1251,263 @@
       ],
     };
   }
+
+  // ---------------------------------------------------------------------------
+  // Google Drive sync (optional, hosted-site only)
+  //
+  // Uses Google Identity Services for OAuth (token model — no client secret) and
+  // the Drive REST API with the least-privilege `drive.file` scope, so the app
+  // can only ever see the single `floorplan.json` it creates. Conflicts resolve
+  // by newest-wins using the document's `updatedAt` timestamp.
+  // ---------------------------------------------------------------------------
+  const DRIVE = (() => {
+    const SCOPE = "https://www.googleapis.com/auth/drive.file";
+    const FILE_NAME = "floorplan.json";
+    const LS = {
+      clientId: "floorplan.drive.clientId",
+      fileId: "floorplan.drive.fileId",
+      connected: "floorplan.drive.connected",
+      auto: "floorplan.drive.auto",
+    };
+
+    let clientId = localStorage.getItem(LS.clientId) || "";
+    let fileId = localStorage.getItem(LS.fileId) || "";
+    let connected = localStorage.getItem(LS.connected) === "1";
+    let auto = localStorage.getItem(LS.auto) !== "0";
+    let token = null;
+    let tokenExp = 0;
+    let tokenClient = null;
+    let busy = false;
+    let timer = null;
+
+    const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (_) {} };
+
+    function setStatus(msg, kind) {
+      const node = el("drive-status");
+      if (node) {
+        node.textContent = msg || "";
+        node.className = "drive-status" + (kind ? " " + kind : "");
+      }
+    }
+    function pill() {
+      const b = el("btn-drive");
+      if (!b) return;
+      b.classList.toggle("active", connected);
+      b.title = connected ? "Google Drive: connected" : "Google Drive: not connected";
+    }
+    function updateUI() {
+      const has = !!clientId;
+      el("drive-clientid").value = clientId;
+      el("drive-auto").checked = auto;
+      el("drive-connect").hidden = connected;
+      el("drive-disconnect").hidden = !connected;
+      el("drive-syncnow").hidden = !connected;
+      el("drive-connect").disabled = !has;
+      pill();
+    }
+
+    function gisReady() {
+      return !!(window.google && google.accounts && google.accounts.oauth2);
+    }
+    function waitForGis(cb, tries = 25) {
+      if (gisReady()) return cb(true);
+      if (tries <= 0) return cb(false);
+      setTimeout(() => waitForGis(cb, tries - 1), 200);
+    }
+
+    // Acquire an access token. interactive=true is allowed to show UI/consent.
+    function getToken(interactive) {
+      return new Promise((resolve, reject) => {
+        if (token && Date.now() < tokenExp - 60000) return resolve(token);
+        if (!gisReady()) return reject(new Error("Google sign-in library not loaded"));
+        if (!clientId) return reject(new Error("Set your OAuth Client ID first"));
+        if (!tokenClient || tokenClient.__cid !== clientId) {
+          tokenClient = google.accounts.oauth2.initTokenClient({ client_id: clientId, scope: SCOPE, callback: () => {} });
+          tokenClient.__cid = clientId;
+        }
+        tokenClient.callback = (resp) => {
+          if (resp && resp.error) return reject(new Error(resp.error_description || resp.error));
+          token = resp.access_token;
+          tokenExp = Date.now() + (resp.expires_in ? resp.expires_in * 1000 : 3600000);
+          resolve(token);
+        };
+        try {
+          tokenClient.requestAccessToken({ prompt: interactive ? "consent" : "" });
+        } catch (e) {
+          reject(e);
+        }
+      });
+    }
+
+    async function api(url, opts, interactive) {
+      const t = await getToken(interactive);
+      let res = await fetch(url, withAuth(opts, t));
+      if (res.status === 401) {
+        token = null;
+        const t2 = await getToken(true);
+        res = await fetch(url, withAuth(opts, t2));
+      }
+      if (!res.ok) throw new Error("Drive API " + res.status);
+      return res;
+    }
+    function withAuth(opts, t) {
+      const o = opts || {};
+      return { ...o, headers: { ...(o.headers || {}), Authorization: "Bearer " + t } };
+    }
+
+    async function findFile() {
+      const q = encodeURIComponent(`name='${FILE_NAME}' and trashed=false`);
+      const res = await api(`https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id,modifiedTime)`);
+      const data = await res.json();
+      return data.files && data.files[0];
+    }
+    async function downloadFile(id) {
+      const res = await api(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`);
+      return res.text();
+    }
+    async function createFile(content) {
+      const boundary = "flp" + Math.random().toString(36).slice(2);
+      const meta = { name: FILE_NAME, mimeType: "application/json" };
+      const body =
+        `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n` +
+        `--${boundary}\r\nContent-Type: application/json\r\n\r\n${content}\r\n--${boundary}--`;
+      const res = await api(`https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id`, {
+        method: "POST",
+        headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
+        body,
+      });
+      const data = await res.json();
+      return data.id;
+    }
+    async function updateFile(id, content) {
+      await api(`https://www.googleapis.com/upload/drive/v3/files/${id}?uploadType=media`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: content,
+      });
+    }
+
+    async function syncNow(interactive) {
+      if (!connected || busy) return;
+      busy = true;
+      setStatus("Syncing…");
+      try {
+        // Make sure we have a token (and, on first run, locate any existing file).
+        await getToken(interactive);
+        if (!fileId) {
+          const f = await findFile();
+          if (f) { fileId = f.id; lsSet(LS.fileId, fileId); }
+        }
+        if (!fileId) {
+          fileId = await createFile(serialize());
+          lsSet(LS.fileId, fileId);
+          setStatus("Saved to Drive · " + timeNow());
+        } else {
+          const text = await downloadFile(fileId);
+          let remote = null;
+          try { remote = JSON.parse(text); } catch (_) {}
+          const remoteAt = (remote && +remote.updatedAt) || 0;
+          const localAt = +doc.updatedAt || 0;
+          if (remote && remoteAt > localAt) {
+            applyRemoteDoc(normalize(remote));
+            setStatus("Updated from Drive · " + timeNow());
+          } else if (localAt > remoteAt) {
+            await updateFile(fileId, serialize());
+            setStatus("Saved to Drive · " + timeNow());
+          } else {
+            setStatus("Up to date · " + timeNow());
+          }
+        }
+        pill();
+      } catch (e) {
+        // A missing file (e.g. deleted in Drive) — drop the id and recreate next time.
+        if (/Drive API 404/.test(e.message)) { fileId = ""; lsSet(LS.fileId, ""); }
+        setStatus("Sync error: " + e.message, "err");
+      } finally {
+        busy = false;
+      }
+    }
+
+    function timeNow() {
+      return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
+
+    function scheduleSync() {
+      if (!connected || !auto) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => syncNow(false), 2500);
+    }
+
+    async function connect() {
+      clientId = el("drive-clientid").value.trim();
+      lsSet(LS.clientId, clientId);
+      if (!clientId) { setStatus("Enter your OAuth Client ID first.", "err"); return; }
+      if (!gisReady()) { setStatus("Google library not loaded — check your connection.", "err"); return; }
+      try {
+        setStatus("Connecting…");
+        await getToken(true);
+        connected = true;
+        lsSet(LS.connected, "1");
+        updateUI();
+        await syncNow(true);
+      } catch (e) {
+        setStatus("Could not connect: " + e.message, "err");
+      }
+    }
+
+    function disconnect() {
+      try {
+        if (token && gisReady() && google.accounts.oauth2.revoke) google.accounts.oauth2.revoke(token, () => {});
+      } catch (_) {}
+      token = null;
+      connected = false;
+      lsSet(LS.connected, "0");
+      updateUI();
+      setStatus("Disconnected.");
+    }
+
+    function open() {
+      updateUI();
+      if (!el("drive-status").textContent) {
+        setStatus(connected ? "Connected." : clientId ? "Ready to connect." : "Add your OAuth Client ID to begin.");
+      }
+      el("drive-modal").hidden = false;
+    }
+    function close() { el("drive-modal").hidden = true; }
+
+    function bindEvents() {
+      el("btn-drive").addEventListener("click", open);
+      el("drive-close").addEventListener("click", close);
+      el("drive-modal").addEventListener("click", (e) => { if (e.target.id === "drive-modal") close(); });
+      el("drive-connect").addEventListener("click", connect);
+      el("drive-disconnect").addEventListener("click", disconnect);
+      el("drive-syncnow").addEventListener("click", () => syncNow(true));
+      el("drive-clientid").addEventListener("input", (e) => {
+        clientId = e.target.value.trim();
+        lsSet(LS.clientId, clientId);
+        el("drive-connect").disabled = !clientId;
+      });
+      el("drive-auto").addEventListener("change", (e) => {
+        auto = e.target.checked;
+        lsSet(LS.auto, auto ? "1" : "0");
+        if (auto) scheduleSync();
+      });
+    }
+
+    function boot() {
+      bindEvents();
+      updateUI();
+      // If previously connected, try a silent token + sync once the lib loads.
+      if (connected && clientId) {
+        waitForGis((ok) => {
+          if (!ok) { setStatus("Google library unavailable (offline?).", "err"); return; }
+          getToken(false).then(() => syncNow(false)).catch(() => setStatus("Sign-in expired — open Drive and reconnect.", "err"));
+        });
+      }
+    }
+
+    return { scheduleSync, boot };
+  })();
 
   // ---------------------------------------------------------------------------
   // Keyboard
@@ -1312,4 +1587,5 @@
   renderLayoutBar();
   refreshPanel();
   fitView();
+  DRIVE.boot();
 })();

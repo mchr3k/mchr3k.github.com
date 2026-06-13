@@ -46,6 +46,7 @@
       </div>
 
       <div class="toolbar-group right">
+        <button id="btn-drive" title="Sync with Google Drive">☁ Drive</button>
         <button id="btn-import" title="Import a saved plan (JSON)">Import</button>
         <button id="btn-export" title="Export the current plan (JSON)">Export</button>
         <button id="btn-clear" class="danger" title="Delete everything">Clear</button>
@@ -139,6 +140,38 @@
       </aside>
     </main>
 
+    <div id="drive-modal" class="modal" hidden>
+      <div class="modal-card">
+        <button class="modal-close" id="drive-close" title="Close">×</button>
+        <h2>☁ Google Drive sync</h2>
+        <p class="muted small">
+          Syncs this plan to a single <code>floorplan.json</code> in your Drive and keeps it up to date
+          automatically (newest change wins). Uses the least-privilege <code>drive.file</code> scope, so the app
+          can only see the file it creates. Works on the hosted site, not when opening the file locally.
+        </p>
+
+        <label class="field">
+          <span>OAuth Client ID</span>
+          <input type="text" id="drive-clientid" placeholder="xxxxxxxx.apps.googleusercontent.com" autocomplete="off" />
+        </label>
+        <p class="muted small">
+          One-time setup — see <strong>“Google Drive sync”</strong> in the README for the exact steps.
+          The Client ID is stored only in this browser; no secret is needed.
+        </p>
+
+        <div class="drive-row">
+          <button id="drive-connect">Connect Google Drive</button>
+          <button id="drive-disconnect" hidden>Disconnect</button>
+          <button id="drive-syncnow" hidden>Sync now</button>
+        </div>
+
+        <label class="check"><input type="checkbox" id="drive-auto" checked /> Auto-sync changes</label>
+        <p id="drive-status" class="drive-status"></p>
+      </div>
+    </div>
+
+    <!-- Google Identity Services (for Drive OAuth). Loads only when online. -->
+    <script src="https://accounts.google.com/gsi/client" async></script>
     <script src="app.js"></script>
   </body>
 </html>

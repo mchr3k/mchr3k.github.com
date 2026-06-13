@@ -24,6 +24,8 @@ drag it into a browser tab). That's it.
 - **Layouts** — duplicate the *entire* arrangement into a new named layout so
   you can explore several alternatives side by side and switch between them.
 - **Grid + snapping** (10 cm) to keep things aligned, with pan and zoom.
+- **Google Drive sync** (optional) to keep one plan in sync across devices — see
+  below.
 
 ### Keyboard shortcuts
 
@@ -40,6 +42,54 @@ drag it into a browser tab). That's it.
 - Your plan is **auto-saved in this browser** (localStorage) as you work.
 - Use **Export** to download the whole document (all layouts) as a JSON file,
   and **Import** to load it back — handy for backups or moving between devices.
+
+## Google Drive sync (optional)
+
+The **☁ Drive** button syncs your plan to a single `floorplan.json` in your
+Google Drive and keeps it up to date automatically. Conflicts resolve by
+**newest-wins** (the most recently edited copy overwrites the other), so you can
+edit on a laptop and a phone and they converge.
+
+Notes:
+
+- It uses the least-privilege **`drive.file`** scope — the app can only see the
+  one file it creates, never the rest of your Drive.
+- It works on the **hosted HTTPS site** (e.g. `https://mchr3k.github.io/floorplan/`),
+  not when opening the file locally (Google OAuth can't run from `file://`).
+  Export/Import remains the offline path.
+- No secret is stored in the repo or the page — browser apps use the OAuth
+  *token* flow. Your Client ID lives only in your browser's localStorage.
+
+### One-time setup (~5 minutes)
+
+You need a free Google OAuth **Client ID**:
+
+1. Go to the [Google Cloud Console](https://console.cloud.google.com/) and
+   create a project (or pick an existing one).
+2. **APIs & Services → Library →** enable the **Google Drive API**.
+3. **APIs & Services → OAuth consent screen:** choose **External**, fill in the
+   app name and your email. Under **Scopes** you don't need to add anything
+   (`drive.file` is non-sensitive). Add your own Google account under **Test
+   users** (or click **Publish** — `drive.file` needs no Google verification).
+4. **APIs & Services → Credentials → Create credentials → OAuth client ID →
+   Application type: Web application.**
+   - Under **Authorised JavaScript origins** add the origin you'll use, e.g.
+     `https://mchr3k.github.io` (add `http://localhost:8000` too if you serve it
+     locally over http for testing).
+   - You can leave **Authorised redirect URIs** empty — the token flow uses the
+     origin only.
+5. Copy the **Client ID** (looks like `…apps.googleusercontent.com`).
+
+### Connecting
+
+1. Open the site over HTTPS, click **☁ Drive**, paste your Client ID, and click
+   **Connect Google Drive**.
+2. Approve the consent prompt. From then on, changes auto-upload (within a few
+   seconds) and the latest version is pulled when you open the app. Use
+   **Sync now** to force a sync, or untick **Auto-sync** to go manual.
+
+If you ever see “Sign-in expired”, just open the dialog and connect again
+(browser OAuth tokens are short-lived and aren't stored).
 
 ## Units & model
 
