@@ -40,6 +40,7 @@
       </div>
 
       <div class="toolbar-group">
+        <label class="check"><input type="checkbox" id="chk-edges" checked /> Edge lengths</label>
         <label class="check"><input type="checkbox" id="chk-grid" checked /> Grid</label>
         <label class="check"><input type="checkbox" id="chk-snap" checked /> Snap</label>
       </div>
@@ -120,6 +121,15 @@
             <span>Colour</span>
             <input type="color" id="f-color" />
           </label>
+
+          <div id="room-walls" class="room-walls" hidden>
+            <h3>Wall features</h3>
+            <div class="wall-buttons">
+              <button id="btn-add-inset" type="button" title="Add a rectangular cut-in (e.g. chimney breast)">+ Chimney breast</button>
+              <button id="btn-add-outset" type="button" title="Add a rectangular cut-out (e.g. bay window)">+ Bay window</button>
+            </div>
+            <ul id="walls-list" class="walls-list"></ul>
+          </div>
 
           <div id="room-contents" class="room-contents" hidden>
             <h3>Objects in this room</h3>

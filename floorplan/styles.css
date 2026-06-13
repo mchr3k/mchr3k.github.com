@@ -241,6 +241,64 @@ kbd {
   flex: 1;
 }
 
+.wall-buttons {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.wall-buttons button {
+  flex: 1;
+  font-size: 12px;
+  padding: 8px 6px;
+}
+.walls-list {
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 0;
+}
+.wall-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  margin-bottom: 8px;
+}
+.wall-item-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.wall-item-head .kind {
+  font-size: 12px;
+  font-weight: 600;
+}
+.wall-item-head button {
+  padding: 3px 8px;
+  font-size: 12px;
+  min-height: 0;
+}
+.wall-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.wall-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.wall-grid input,
+.wall-grid select {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  min-height: 32px;
+}
+
 .contents-list {
   list-style: none;
   margin: 0;

@@ -32,7 +32,7 @@
   let state;
   // View transform: screen_px = world_cm * scale + offset
   let view = { scale: 0.45, ox: 70, oy: 70 };
-  let ui = { grid: true, snap: true, gridCm: 10 };
+  let ui = { grid: true, snap: true, edges: true, gridCm: 10 };
   /** @type {{kind:'room'|'object', roomId:string, objId?:string}|null} */
   let selection = null;
 
@@ -81,26 +81,99 @@
     return [cx + dx * c - dy * s, cy + dx * s + dy * c];
   }
 
-  // ---------- Geometry layer (the seam for future polygon shapes) ----------
-  // Local corners of an item in its own coordinate frame (cm), clockwise.
-  function localCorners(item) {
-    return [
-      [0, 0],
-      [item.w, 0],
-      [item.w, item.h],
-      [0, item.h],
-    ];
-  }
-  // Edges of a rectangle, each annotated with which dimension drives it.
-  // For future polygons this would return per-edge lengths instead.
-  function edgesOf(item) {
-    const c = localCorners(item);
-    return [
-      { i: 0, a: c[0], b: c[1], len: item.w, dim: "w" },
-      { i: 1, a: c[1], b: c[2], len: item.h, dim: "h" },
-      { i: 2, a: c[2], b: c[3], len: item.w, dim: "w" },
-      { i: 3, a: c[3], b: c[0], len: item.h, dim: "h" },
-    ];
+  // ---------- Geometry layer ----------
+  // An item's outline in its own coordinate frame (cm), as a rectilinear
+  // polygon. A plain rectangle has no wall features; rooms may carry "notches"
+  // — axis-aligned rectangular cut-ins (chimney breasts) and cut-outs (bay
+  // windows) attached to a wall. Every generated edge records `ctl`, a setter
+  // that maps an edited cm length back to the parameter that drives it, so all
+  // edges remain directly editable.
+  //
+  // A notch = { id, side:'top'|'right'|'bottom'|'left', pos, width, depth }.
+  //   pos    = distance (cm) along the wall from its start corner to the notch.
+  //   width  = length (cm) of the notch along the wall.
+  //   depth  = signed cm; > 0 protrudes outward (bay window),
+  //            < 0 cuts inward (chimney breast).
+  const SIDES = {
+    top: { start: (it) => [0, 0], dir: [1, 0], out: [0, -1], len: (it) => it.w, base: "w" },
+    right: { start: (it) => [it.w, 0], dir: [0, 1], out: [1, 0], len: (it) => it.h, base: "h" },
+    bottom: { start: (it) => [it.w, it.h], dir: [-1, 0], out: [0, 1], len: (it) => it.w, base: "w" },
+    left: { start: (it) => [0, it.h], dir: [0, -1], out: [-1, 0], len: (it) => it.h, base: "h" },
+  };
+
+  // Apply an edited length to a stored numeric field using the change in length
+  // (delta), which works uniformly whether the edge is a whole wall, a wall
+  // segment, a notch face, or a notch side.
+  const setW = (item) => (newLen, oldLen) => { item.w = Math.max(1, Math.round(item.w + (newLen - oldLen))); };
+  const setH = (item) => (newLen, oldLen) => { item.h = Math.max(1, Math.round(item.h + (newLen - oldLen))); };
+  const setNotchPos = (n) => (newLen, oldLen) => { n.pos = Math.max(0, Math.round(n.pos + (newLen - oldLen))); };
+  const setNotchWidth = (n) => (newLen, oldLen) => { n.width = Math.max(1, Math.round(n.width + (newLen - oldLen))); };
+  const setNotchDepth = (n) => (newLen, oldLen) => {
+    const mag = Math.max(1, Math.round(Math.abs(n.depth) + (newLen - oldLen)));
+    n.depth = (n.depth < 0 ? -1 : 1) * mag;
+  };
+
+  function itemLocalGeometry(item) {
+    const notches = (item.notches || []).filter((n) => SIDES[n.side]);
+    const setBase = (item, base) => (base === "w" ? setW(item) : setH(item));
+
+    if (!notches.length) {
+      const c = [[0, 0], [item.w, 0], [item.w, item.h], [0, item.h]];
+      return {
+        points: c,
+        edges: [
+          { a: c[0], b: c[1], len: item.w, ctl: setW(item) },
+          { a: c[1], b: c[2], len: item.h, ctl: setH(item) },
+          { a: c[2], b: c[3], len: item.w, ctl: setW(item) },
+          { a: c[3], b: c[0], len: item.h, ctl: setH(item) },
+        ],
+      };
+    }
+
+    const edges = [];
+    let cur = [0, 0]; // walk start = top-left corner
+    for (const side of ["top", "right", "bottom", "left"]) {
+      const S = SIDES[side];
+      const sideLen = S.len(item);
+      const startPt = S.start(item);
+      const dir = S.dir;
+      const out = S.out;
+      const endCorner = [startPt[0] + dir[0] * sideLen, startPt[1] + dir[1] * sideLen];
+      const at = (d) => [startPt[0] + dir[0] * d, startPt[1] + dir[1] * d];
+
+      // notches on this wall, clamped so they fit, ordered along the wall
+      const here = notches
+        .filter((n) => n.side === side)
+        .map((n) => {
+          const width = Math.min(Math.max(1, n.width), sideLen);
+          const pos = Math.min(Math.max(0, n.pos), sideLen - width);
+          return { n, pos, width };
+        })
+        .sort((a, b) => a.pos - b.pos);
+
+      let along = 0;
+      for (const { n, pos, width } of here) {
+        if (pos > along + 0.01) {
+          const p = at(pos);
+          edges.push({ a: cur, b: p, len: pos - along, ctl: setNotchPos(n) });
+          cur = p;
+          along = pos;
+        }
+        const pa = [cur[0] + out[0] * n.depth, cur[1] + out[1] * n.depth];
+        const faceEnd = at(pos + width);
+        const pb = [faceEnd[0] + out[0] * n.depth, faceEnd[1] + out[1] * n.depth];
+        edges.push({ a: cur, b: pa, len: Math.abs(n.depth), ctl: setNotchDepth(n) });
+        edges.push({ a: pa, b: pb, len: width, ctl: setNotchWidth(n) });
+        edges.push({ a: pb, b: faceEnd, len: Math.abs(n.depth), ctl: setNotchDepth(n) });
+        cur = faceEnd;
+        along = pos + width;
+      }
+      if (along < sideLen - 0.01) {
+        edges.push({ a: cur, b: endCorner, len: sideLen - along, ctl: setBase(item, S.base) });
+      }
+      cur = endCorner;
+    }
+    return { points: edges.map((e) => e.a), edges };
   }
 
   // Resolve a selection into the live objects it points at.
@@ -120,29 +193,24 @@
     const originY = item === room ? room.y : room.y + item.y;
     const cxL = item.w / 2;
     const cyL = item.h / 2;
-    const corners = localCorners(item).map(([lx, ly]) => {
+    const toScreen = (lx, ly) => {
       const [rx, ry] = rot ? rotatePoint(lx, ly, cxL, cyL, rot) : [lx, ly];
       return worldToScreen(originX + rx, originY + ry);
-    });
+    };
+    const local = itemLocalGeometry(item);
+    const corners = local.points.map(([lx, ly]) => toScreen(lx, ly));
     const centerW = worldToScreen(originX + cxL, originY + cyL);
-    const edges = edgesOf(item).map((edgeDef) => {
-      const aL = edgeDef.a;
-      const bL = edgeDef.b;
-      const mid = [(aL[0] + bL[0]) / 2, (aL[1] + bL[1]) / 2];
-      const [mrx, mry] = rot ? rotatePoint(mid[0], mid[1], cxL, cyL, rot) : mid;
-      // push the label slightly outside the shape (away from centre)
-      const ox = mid[0] - cxL;
-      const oy = mid[1] - cyL;
-      const ml = Math.hypot(ox, oy) || 1;
-      const off = 14 / view.scale; // ~14px outside, expressed in cm
-      const pL = [mid[0] + (ox / ml) * off, mid[1] + (oy / ml) * off];
-      const [plx, ply] = rot ? rotatePoint(pL[0], pL[1], cxL, cyL, rot) : pL;
+    const off = 14 / view.scale; // push label ~14px outside, expressed in cm
+    const edges = local.edges.map((e, idx) => {
+      const mid = [(e.a[0] + e.b[0]) / 2, (e.a[1] + e.b[1]) / 2];
+      const dx = mid[0] - cxL;
+      const dy = mid[1] - cyL;
+      const ml = Math.hypot(dx, dy) || 1;
       return {
-        dim: edgeDef.dim,
-        i: edgeDef.i,
-        len: edgeDef.len,
-        screen: worldToScreen(originX + mrx, originY + mry),
-        labelScreen: worldToScreen(originX + plx, originY + ply),
+        idx,
+        len: e.len,
+        ctl: e.ctl,
+        labelScreen: toScreen(mid[0] + (dx / ml) * off, mid[1] + (dy / ml) * off),
       };
     });
     return { corners, center: centerW, edges };
@@ -291,6 +359,7 @@
   }
 
   function drawEdgeLabels(g, geo, item, roomId, objId) {
+    if (!ui.edges) return;
     for (const e of geo.edges) {
       const [lx, ly] = e.labelScreen;
       const txt = `${round(e.len)} cm`;
@@ -299,7 +368,7 @@
         class: "edge-label",
         "data-kind": "edge",
         "data-room": roomId,
-        "data-dim": e.dim,
+        "data-edge": e.idx,
         style: "cursor:pointer",
       });
       if (objId) eg.setAttribute("data-obj", objId);
@@ -486,19 +555,24 @@
     closeEdgeEditor();
     const roomId = target.getAttribute("data-room");
     const objId = target.getAttribute("data-obj");
-    const dim = target.getAttribute("data-dim");
+    const edgeIdx = parseInt(target.getAttribute("data-edge"), 10);
     const room = state.rooms.find((r) => r.id === roomId);
     if (!room) return;
     const item = objId ? room.objects.find((o) => o.id === objId) : room;
     if (!item) return;
     select(objId ? { kind: "object", roomId, objId } : { kind: "room", roomId });
 
+    // Recompute the edge so we have its current length and its setter `ctl`.
+    const edge = itemLocalGeometry(item).edges[edgeIdx];
+    if (!edge) return;
+    const oldLen = round(edge.len);
+
     const [mx, my] = mousePos(e);
     const input = document.createElement("input");
     input.type = "number";
     input.min = "1";
     input.step = "1";
-    input.value = round(item[dim]);
+    input.value = oldLen;
     input.className = "edge-editor";
     input.style.left = mx + "px";
     input.style.top = my + "px";
@@ -509,7 +583,7 @@
     const commit = () => {
       const v = parseFloat(input.value);
       if (!isNaN(v) && v >= 1) {
-        item[dim] = round(v);
+        edge.ctl(v, oldLen);
         save();
       }
       closeEdgeEditor();
@@ -567,9 +641,122 @@
     rotField.hidden = r.kind !== "object";
     if (r.kind === "object") el("f-rot").value = String(item.rot || 0);
 
+    const walls = el("room-walls");
+    walls.hidden = r.kind !== "room";
+    if (r.kind === "room") renderWalls(r.room);
+
     const contents = el("room-contents");
     contents.hidden = r.kind !== "room";
     if (r.kind === "room") renderContents(r.room);
+  }
+
+  const SIDE_LABELS = { top: "Top wall", right: "Right wall", bottom: "Bottom wall", left: "Left wall" };
+
+  function renderWalls(room) {
+    const list = el("walls-list");
+    list.replaceChildren();
+    const notches = room.notches || [];
+    if (!notches.length) {
+      const li = document.createElement("li");
+      li.style.cssText = "color:var(--muted);font-size:13px;list-style:none";
+      li.textContent = "No cut-ins or cut-outs yet.";
+      list.appendChild(li);
+      return;
+    }
+    for (const n of notches) {
+      const li = document.createElement("li");
+      li.className = "wall-item";
+      const kind = n.depth < 0 ? "Chimney breast (inset)" : "Bay window (outset)";
+
+      const head = document.createElement("div");
+      head.className = "wall-item-head";
+      const kindEl = document.createElement("span");
+      kindEl.className = "kind";
+      kindEl.textContent = kind;
+      const del = document.createElement("button");
+      del.type = "button";
+      del.textContent = "Remove";
+      del.addEventListener("click", () => {
+        room.notches = room.notches.filter((x) => x.id !== n.id);
+        save();
+        render();
+        refreshPanel();
+      });
+      head.append(kindEl, del);
+
+      const grid = document.createElement("div");
+      grid.className = "wall-grid";
+      grid.append(
+        notchField(room, n, "side", "Wall", "select"),
+        notchField(room, n, "pos", "Position (cm)", "number"),
+        notchField(room, n, "width", "Width (cm)", "number"),
+        notchField(room, n, "depth", "Depth (cm)", "number")
+      );
+
+      li.append(head, grid);
+      list.appendChild(li);
+    }
+  }
+
+  // Build one labelled control for a notch property. Depth is shown as a
+  // positive magnitude; its inset/outset direction is preserved on edit.
+  function notchField(room, n, key, label, type) {
+    const wrapEl = document.createElement("label");
+    const span = document.createElement("span");
+    span.textContent = label;
+    let input;
+    if (type === "select") {
+      input = document.createElement("select");
+      for (const s of ["top", "right", "bottom", "left"]) {
+        const opt = document.createElement("option");
+        opt.value = s;
+        opt.textContent = SIDE_LABELS[s];
+        if (n.side === s) opt.selected = true;
+        input.appendChild(opt);
+      }
+      input.addEventListener("change", (e) => { n.side = e.target.value; save(); render(); });
+    } else {
+      input = document.createElement("input");
+      input.type = "number";
+      input.min = key === "pos" ? "0" : "1";
+      input.step = "1";
+      input.value = key === "depth" ? round(Math.abs(n.depth)) : round(n[key]);
+      input.addEventListener("input", (e) => {
+        let v = parseFloat(e.target.value);
+        if (isNaN(v)) return;
+        if (key === "depth") {
+          v = Math.max(1, v);
+          n.depth = (n.depth < 0 ? -1 : 1) * round(v);
+        } else {
+          v = Math.max(key === "pos" ? 0 : 1, v);
+          n[key] = round(v);
+        }
+        render();
+        saveSoon();
+      });
+    }
+    wrapEl.append(span, input);
+    return wrapEl;
+  }
+
+  function addNotch(kind) {
+    const r = resolveSel();
+    if (!r || r.kind !== "room") return;
+    const room = r.room;
+    if (!room.notches) room.notches = [];
+    // sensible default: centred on the top wall
+    const width = Math.min(80, Math.max(20, Math.round(room.w * 0.25)));
+    const notch = {
+      id: uid("n"),
+      side: "top",
+      pos: Math.max(0, Math.round(room.w / 2 - width / 2)),
+      width,
+      depth: kind === "outset" ? 40 : -40,
+    };
+    room.notches.push(notch);
+    save();
+    render();
+    refreshPanel();
   }
 
   function renderContents(room) {
@@ -711,6 +898,7 @@
         name: r.room.name + " copy",
         x: r.room.x + 30,
         y: r.room.y + 30,
+        notches: (r.room.notches || []).map((n) => ({ ...n, id: uid("n") })),
         objects: r.room.objects.map((o) => ({ ...o, id: uid("o") })),
       };
       state.rooms.push(clone);
@@ -765,6 +953,7 @@
       rooms: layout.rooms.map((r) => ({
         ...r,
         id: uid("r"),
+        notches: (r.notches || []).map((n) => ({ ...n, id: uid("n") })),
         objects: r.objects.map((o) => ({ ...o, id: uid("o") })),
       })),
     };
@@ -894,6 +1083,15 @@
       w: Math.max(1, +r.w || 100),
       h: Math.max(1, +r.h || 100),
       color: r.color || "#c7d2fe",
+      notches: (r.notches || [])
+        .filter((n) => ["top", "right", "bottom", "left"].includes(n.side))
+        .map((n) => ({
+          id: n.id || uid("n"),
+          side: n.side,
+          pos: Math.max(0, +n.pos || 0),
+          width: Math.max(1, +n.width || 50),
+          depth: +n.depth || -40,
+        })),
       objects: (r.objects || []).map((o) => ({
         id: o.id || uid("o"),
         name: o.name || "Object",
@@ -1014,6 +1212,7 @@
   el("btn-zoom-in").addEventListener("click", () => zoomBy(1.2));
   el("btn-zoom-out").addEventListener("click", () => zoomBy(1 / 1.2));
   el("btn-zoom-reset").addEventListener("click", fitView);
+  el("chk-edges").addEventListener("change", (e) => { ui.edges = e.target.checked; render(); });
   el("chk-grid").addEventListener("change", (e) => { ui.grid = e.target.checked; render(); });
   el("chk-snap").addEventListener("change", (e) => { ui.snap = e.target.checked; });
   el("btn-export").addEventListener("click", exportPlan);
@@ -1031,6 +1230,10 @@
     refreshPanel();
   });
 
+  // Wall features
+  el("btn-add-inset").addEventListener("click", () => addNotch("inset"));
+  el("btn-add-outset").addEventListener("click", () => addNotch("outset"));
+
   // Layout controls
   el("layout-select").addEventListener("change", (e) => setActiveLayout(e.target.value));
   el("btn-layout-dup").addEventListener("click", duplicateLayout);
@@ -1039,6 +1242,9 @@
   el("btn-layout-delete").addEventListener("click", deleteLayout);
 
   window.addEventListener("resize", render);
+  // Flush any debounced save if the tab is being hidden or closed.
+  window.addEventListener("beforeunload", save);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) save(); });
 
   // ---------------------------------------------------------------------------
   // Boot
