@@ -14,6 +14,10 @@
       </div>
 
       <div class="toolbar-group">
+        <button id="btn-drive" title="Sync with Google Drive">☁ Drive sync</button>
+      </div>
+
+      <div class="toolbar-group">
         <span class="layout-label">Layout</span>
         <select id="layout-select" title="Switch layout"></select>
         <button id="btn-layout-dup" title="Duplicate this whole layout to try a variation">⧉ Duplicate layout</button>
@@ -46,7 +50,6 @@
       </div>
 
       <div class="toolbar-group right">
-        <button id="btn-drive" title="Sync with Google Drive">☁ Drive</button>
         <button id="btn-import" title="Import a saved plan (JSON)">Import</button>
         <button id="btn-export" title="Export the current plan (JSON)">Export</button>
         <button id="btn-clear" class="danger" title="Delete everything">Clear</button>
@@ -148,15 +151,6 @@
           Syncs this plan to a single <code>floorplan.json</code> in your Drive and keeps it up to date
           automatically (newest change wins). Uses the least-privilege <code>drive.file</code> scope, so the app
           can only see the file it creates. Works on the hosted site, not when opening the file locally.
-        </p>
-
-        <label class="field">
-          <span>OAuth Client ID</span>
-          <input type="text" id="drive-clientid" placeholder="xxxxxxxx.apps.googleusercontent.com" autocomplete="off" />
-        </label>
-        <p class="muted small">
-          Pre-filled for this site — just click <strong>Connect</strong>. (Advanced: paste your own
-          Client ID to use a different Google project. Stored only in this browser; no secret needed.)
         </p>
 
         <div class="drive-row">

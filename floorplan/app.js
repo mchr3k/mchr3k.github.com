@@ -1301,13 +1301,10 @@
       b.title = connected ? "Google Drive: connected" : "Google Drive: not connected";
     }
     function updateUI() {
-      const has = !!clientId;
-      el("drive-clientid").value = clientId;
       el("drive-auto").checked = auto;
       el("drive-connect").hidden = connected;
       el("drive-disconnect").hidden = !connected;
       el("drive-syncnow").hidden = !connected;
-      el("drive-connect").disabled = !has;
       pill();
     }
 
@@ -1444,9 +1441,7 @@
     }
 
     async function connect() {
-      clientId = el("drive-clientid").value.trim();
-      lsSet(LS.clientId, clientId);
-      if (!clientId) { setStatus("Enter your OAuth Client ID first.", "err"); return; }
+      if (!clientId) { setStatus("No OAuth Client ID configured.", "err"); return; }
       if (!gisReady()) { setStatus("Google library not loaded — check your connection.", "err"); return; }
       try {
         setStatus("Connecting…");
@@ -1474,7 +1469,7 @@
     function open() {
       updateUI();
       if (!el("drive-status").textContent) {
-        setStatus(connected ? "Connected." : clientId ? "Ready to connect." : "Add your OAuth Client ID to begin.");
+        setStatus(connected ? "Connected." : "Ready to connect.");
       }
       el("drive-modal").hidden = false;
     }
@@ -1487,11 +1482,6 @@
       el("drive-connect").addEventListener("click", connect);
       el("drive-disconnect").addEventListener("click", disconnect);
       el("drive-syncnow").addEventListener("click", () => syncNow(true));
-      el("drive-clientid").addEventListener("input", (e) => {
-        clientId = e.target.value.trim();
-        lsSet(LS.clientId, clientId);
-        el("drive-connect").disabled = !clientId;
-      });
       el("drive-auto").addEventListener("change", (e) => {
         auto = e.target.checked;
         lsSet(LS.auto, auto ? "1" : "0");
