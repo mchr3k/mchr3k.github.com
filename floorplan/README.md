@@ -82,8 +82,12 @@ You need a free Google OAuth **Client ID**:
 
 ### Connecting
 
-1. Open the site over HTTPS, click **☁ Drive**, paste your Client ID, and click
-   **Connect Google Drive**.
+The deployed site already has a Client ID baked in, so the setup above is only
+needed if you fork this to a different origin.
+
+1. Open the site over HTTPS, click **☁ Drive**, and click **Connect Google
+   Drive** (the Client ID is pre-filled; paste your own only to use a different
+   Google project).
 2. Approve the consent prompt. From then on, changes auto-upload (within a few
    seconds) and the latest version is pulled when you open the app. Use
    **Sync now** to force a sync, or untick **Auto-sync** to go manual.

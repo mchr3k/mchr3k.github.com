@@ -1263,6 +1263,11 @@
   const DRIVE = (() => {
     const SCOPE = "https://www.googleapis.com/auth/drive.file";
     const FILE_NAME = "floorplan.json";
+    // Baked-in default OAuth Client ID for this deployment. A Client ID is not a
+    // secret (it ships in client-side code by design); the consent screen and the
+    // authorised-origins allowlist are what protect it. Forks can override it via
+    // the in-app field, which is stored in localStorage and takes precedence.
+    const DEFAULT_CLIENT_ID = "570993263806-e6ga4lb5137114grenq6ucjtmq159o4q.apps.googleusercontent.com";
     const LS = {
       clientId: "floorplan.drive.clientId",
       fileId: "floorplan.drive.fileId",
@@ -1270,7 +1275,7 @@
       auto: "floorplan.drive.auto",
     };
 
-    let clientId = localStorage.getItem(LS.clientId) || "";
+    let clientId = localStorage.getItem(LS.clientId) || DEFAULT_CLIENT_ID;
     let fileId = localStorage.getItem(LS.fileId) || "";
     let connected = localStorage.getItem(LS.connected) === "1";
     let auto = localStorage.getItem(LS.auto) !== "0";
