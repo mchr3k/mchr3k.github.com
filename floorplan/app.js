@@ -1176,7 +1176,8 @@
       layouts = [{ id: uid("l"), name: "Layout 1", rooms: (data.rooms || []).map(normalizeRoom) }];
     }
     const activeId = layouts.some((l) => l.id === data.activeId) ? data.activeId : layouts[0].id;
-    return { version: SCHEMA_VERSION, updatedAt: +data.updatedAt || Date.now(), activeId, layouts };
+    // Missing/zero updatedAt stays 0 so it can't masquerade as newer than Drive.
+    return { version: SCHEMA_VERSION, updatedAt: +data.updatedAt || 0, activeId, layouts };
   }
 
   // Replace the whole document with one pulled from Drive, without bumping the
@@ -1225,7 +1226,9 @@
     const layoutId = uid("l");
     return {
       version: SCHEMA_VERSION,
-      updatedAt: Date.now(),
+      // updatedAt 0 marks this as an untouched default: it must never outrank a
+      // real plan in Drive on first sync. The first real edit stamps it via save().
+      updatedAt: 0,
       activeId: layoutId,
       layouts: [
         {
@@ -1389,7 +1392,7 @@
       });
     }
 
-    async function syncNow(interactive) {
+    async function syncNow(interactive, firstConnect) {
       if (!connected || busy) return;
       busy = true;
       setStatus("Syncing…");
@@ -1414,6 +1417,21 @@
             applyRemoteDoc(normalize(remote));
             setStatus("Updated from Drive · " + timeNow());
           } else if (localAt > remoteAt) {
+            // First sync after connecting a device: if this device's edits would
+            // overwrite an existing Drive plan, confirm rather than silently win.
+            if (firstConnect && remote) {
+              const ok = confirm(
+                "This device has changes that are newer than the plan already in Google Drive.\n\n" +
+                  "OK — overwrite Drive with this device's version.\n" +
+                  "Cancel — discard this device's changes and load the version from Drive."
+              );
+              if (!ok) {
+                applyRemoteDoc(normalize(remote));
+                setStatus("Loaded from Drive · " + timeNow());
+                pill();
+                return;
+              }
+            }
             await updateFile(fileId, serialize());
             setStatus("Saved to Drive · " + timeNow());
           } else {
@@ -1449,7 +1467,7 @@
         connected = true;
         lsSet(LS.connected, "1");
         updateUI();
-        await syncNow(true);
+        await syncNow(true, true);
       } catch (e) {
         setStatus("Could not connect: " + e.message, "err");
       }
