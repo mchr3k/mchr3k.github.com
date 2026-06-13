@@ -432,6 +432,12 @@
   const pointers = new Map(); // pointerId -> {x,y}
   let drag = null; // {type, ...}
   let pinch = null; // {startDist, startScale, cx, cy}
+  const TAP_SLOP = 6; // px of finger movement below which a press counts as a tap
+
+  // Do two selections point at the same room/object?
+  function sameSel(a, b) {
+    return !!a && !!b && a.kind === b.kind && a.roomId === b.roomId && (a.objId || null) === (b.objId || null);
+  }
 
   svg.addEventListener("pointerdown", onPointerDown);
   svg.addEventListener("pointermove", onPointerMove);
@@ -472,17 +478,20 @@
 
     const roomId = target.getAttribute("data-room");
     const objId = target.getAttribute("data-obj");
+    const [gmx, gmy] = mousePos(e);
     if (kind === "object") {
+      const wasSelected = sameSel(selection, { kind: "object", roomId, objId });
       select({ kind: "object", roomId, objId });
       const room = state.rooms.find((r) => r.id === roomId);
       const obj = room.objects.find((o) => o.id === objId);
-      const [wx, wy] = screenToWorld(...mousePos(e));
-      drag = { type: "object", room, obj, startX: obj.x, startY: obj.y, grabX: wx, grabY: wy, moved: false };
+      const [wx, wy] = screenToWorld(gmx, gmy);
+      drag = { type: "object", room, obj, startX: obj.x, startY: obj.y, grabX: wx, grabY: wy, grabMx: gmx, grabMy: gmy, moved: false, wasSelected };
     } else if (kind === "room") {
+      const wasSelected = sameSel(selection, { kind: "room", roomId });
       select({ kind: "room", roomId });
       const room = state.rooms.find((r) => r.id === roomId);
-      const [wx, wy] = screenToWorld(...mousePos(e));
-      drag = { type: "room", room, startX: room.x, startY: room.y, grabX: wx, grabY: wy, moved: false };
+      const [wx, wy] = screenToWorld(gmx, gmy);
+      drag = { type: "room", room, startX: room.x, startY: room.y, grabX: wx, grabY: wy, grabMx: gmx, grabMy: gmy, moved: false, wasSelected };
     }
   }
 
@@ -522,10 +531,15 @@
       return;
     }
 
+    // Ignore tiny finger jitter so a tap stays a tap (and can deselect).
+    if (!drag.moved) {
+      if (Math.hypot(mx - drag.grabMx, my - drag.grabMy) < TAP_SLOP) return;
+      drag.moved = true;
+    }
+
     const [wx, wy] = screenToWorld(mx, my);
     const dx = wx - drag.grabX;
     const dy = wy - drag.grabY;
-    drag.moved = true;
     if (drag.type === "object") {
       drag.obj.x = snapVal(drag.startX + dx);
       drag.obj.y = snapVal(drag.startY + dy);
@@ -543,7 +557,12 @@
       try { svg.releasePointerCapture(e.pointerId); } catch (_) {}
     }
     if (pointers.size < 2) pinch = null;
-    if (drag && drag.moved) save();
+    if (drag) {
+      if (drag.moved) save();
+      // A tap (no drag) on the already-selected item clears the selection —
+      // a reliable way to deselect on touch, where empty canvas is scarce.
+      else if ((drag.type === "object" || drag.type === "room") && drag.wasSelected) select(null);
+    }
     drag = null;
   }
 
@@ -601,7 +620,13 @@
     input.focus();
     input.select();
 
+    // `closing` guards against re-entry: committing removes the focused input,
+    // which fires `blur` — without the guard that would apply the edit a second
+    // time (doubling the delta), and Escape would commit instead of cancel.
+    let closing = false;
     const commit = () => {
+      if (closing) return;
+      closing = true;
       const v = parseFloat(input.value);
       if (!isNaN(v) && v >= 1) {
         edge.ctl(v, oldLen);
@@ -611,9 +636,14 @@
       render();
       refreshPanel();
     };
+    const cancel = () => {
+      if (closing) return;
+      closing = true;
+      closeEdgeEditor();
+    };
     input.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter") commit();
-      else if (ev.key === "Escape") closeEdgeEditor();
+      else if (ev.key === "Escape") cancel();
     });
     input.addEventListener("blur", commit);
     edgeEditor = input;
@@ -1616,6 +1646,7 @@
   el("btn-rotate").addEventListener("click", rotateSel);
   el("btn-duplicate").addEventListener("click", duplicateSel);
   el("btn-delete").addEventListener("click", deleteSel);
+  el("btn-deselect").addEventListener("click", () => select(null));
   el("btn-zoom-in").addEventListener("click", () => zoomBy(1.2));
   el("btn-zoom-out").addEventListener("click", () => zoomBy(1 / 1.2));
   el("btn-zoom-reset").addEventListener("click", fitView);
