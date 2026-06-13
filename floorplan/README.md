@@ -50,11 +50,22 @@ Google Drive and keeps it up to date automatically. Conflicts resolve by
 **newest-wins** (the most recently edited copy overwrites the other), so you can
 edit on a laptop and a phone and they converge.
 
-A freshly-opened device that hasn't been edited never counts as "newer", so
-connecting a new device **pulls** your existing plan rather than overwriting it.
-If a device genuinely does have newer edits when you first connect it, the app
-**asks** before overwriting the Drive copy. (Drive also keeps file version
-history as a backstop.)
+Ordering uses a **monotonic revision counter**, not wall-clock time, so syncing
+is reliable even when two devices' clocks disagree. A freshly-opened device that
+hasn't been edited never counts as "newer", so connecting a new device **pulls**
+your existing plan rather than overwriting it. If a device genuinely has newer
+edits when you first connect it, the app **asks** before overwriting Drive. Every
+sync also re-scans Drive and reconciles onto a single canonical file, healing any
+duplicate copies. (Drive's own file version history is an extra backstop.)
+
+If two devices ever get out of step, use the **Force** buttons in the dialog to
+settle it by hand:
+
+- **↑ Force this device → Drive** — push this device's plan up, overwriting Drive.
+- **↓ Force Drive → this device** — pull Drive's copy down, overwriting this device.
+
+Turning **Auto-sync** off stops syncing on change and on load; use **Sync now**
+or the Force buttons to move data manually.
 
 Notes:
 
