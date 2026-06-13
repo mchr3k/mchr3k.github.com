@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Floor Plan Designer</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="toolbar">
+      <div class="toolbar-group brand">
+        <span class="logo">▢</span>
+        <strong>Floor Plan Designer</strong>
+      </div>
+
+      <div class="toolbar-group">
+        <span class="layout-label">Layout</span>
+        <select id="layout-select" title="Switch layout"></select>
+        <button id="btn-layout-dup" title="Duplicate this whole layout to try a variation">⧉ Duplicate layout</button>
+        <button id="btn-layout-new" title="Start a new empty layout">+</button>
+        <button id="btn-layout-rename" title="Rename this layout">✎</button>
+        <button id="btn-layout-delete" title="Delete this layout">🗑</button>
+      </div>
+
+      <div class="toolbar-group">
+        <button id="btn-add-room" title="Add a new room">+ Room</button>
+        <button id="btn-add-object" title="Add an object to the selected room">+ Object</button>
+      </div>
+
+      <div class="toolbar-group">
+        <button id="btn-rotate" title="Rotate object 90° (R)" disabled>⟳ Rotate</button>
+        <button id="btn-duplicate" title="Duplicate selection (Ctrl/Cmd+D)" disabled>⧉ Duplicate</button>
+        <button id="btn-delete" title="Delete selection (Del)" disabled>🗑 Delete</button>
+      </div>
+
+      <div class="toolbar-group">
+        <button id="btn-zoom-out" title="Zoom out">−</button>
+        <button id="btn-zoom-reset" title="Fit / reset view">Fit</button>
+        <button id="btn-zoom-in" title="Zoom in">+</button>
+      </div>
+
+      <div class="toolbar-group">
+        <label class="check"><input type="checkbox" id="chk-grid" checked /> Grid</label>
+        <label class="check"><input type="checkbox" id="chk-snap" checked /> Snap</label>
+      </div>
+
+      <div class="toolbar-group right">
+        <button id="btn-import" title="Import a saved plan (JSON)">Import</button>
+        <button id="btn-export" title="Export the current plan (JSON)">Export</button>
+        <button id="btn-clear" class="danger" title="Delete everything">Clear</button>
+        <input type="file" id="file-import" accept="application/json,.json" hidden />
+      </div>
+    </header>
+
+    <main class="layout">
+      <div id="canvas-wrap" class="canvas-wrap">
+        <svg id="canvas" xmlns="http://www.w3.org/2000/svg"></svg>
+        <div id="hint" class="hint">
+          Drag the background to pan · scroll to zoom · drag rooms/objects to move them ·
+          click any edge length to edit it
+        </div>
+      </div>
+
+      <aside id="panel" class="panel">
+        <div id="panel-empty" class="panel-section muted">
+          <h2>Nothing selected</h2>
+          <p>Select a room or object to edit it, or use <strong>+ Room</strong> to start.</p>
+          <hr />
+          <h3>Tips</h3>
+          <ul class="tips">
+            <li>Every edge length is shown in <strong>cm</strong> — click it to set it exactly.</li>
+            <li>Room sizes are entered in <strong>metres</strong> when created; edges read out in cm.</li>
+            <li>Drag a room to reposition the whole room (and its contents).</li>
+            <li>Keys: <kbd>R</kbd> rotate · <kbd>Del</kbd> delete · <kbd>Ctrl/⌘+D</kbd> duplicate · <kbd>arrows</kbd> nudge.</li>
+            <li>Everything is auto-saved in this browser. Use Export to keep a copy.</li>
+          </ul>
+        </div>
+
+        <div id="panel-details" class="panel-section" hidden>
+          <h2 id="panel-title">Details</h2>
+
+          <label class="field">
+            <span>Name</span>
+            <input type="text" id="f-name" />
+          </label>
+
+          <div class="field-row">
+            <label class="field">
+              <span>Width (cm)</span>
+              <input type="number" id="f-w" min="1" step="1" />
+            </label>
+            <label class="field">
+              <span>Height (cm)</span>
+              <input type="number" id="f-h" min="1" step="1" />
+            </label>
+          </div>
+
+          <div class="field-row">
+            <label class="field">
+              <span id="f-x-label">X (cm)</span>
+              <input type="number" id="f-x" step="1" />
+            </label>
+            <label class="field">
+              <span id="f-y-label">Y (cm)</span>
+              <input type="number" id="f-y" step="1" />
+            </label>
+          </div>
+
+          <label class="field" id="f-rot-field" hidden>
+            <span>Rotation</span>
+            <select id="f-rot">
+              <option value="0">0°</option>
+              <option value="90">90°</option>
+              <option value="180">180°</option>
+              <option value="270">270°</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Colour</span>
+            <input type="color" id="f-color" />
+          </label>
+
+          <div id="room-contents" class="room-contents" hidden>
+            <h3>Objects in this room</h3>
+            <ul id="contents-list" class="contents-list"></ul>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
