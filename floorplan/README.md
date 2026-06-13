@@ -45,10 +45,16 @@ drag it into a browser tab). That's it.
 
 ## Google Drive sync (optional)
 
-The **☁ Drive** button syncs your plan to a single `floorplan.json` in your
+The **☁ Drive sync** button syncs your plan to a single `floorplan.json` in your
 Google Drive and keeps it up to date automatically. Conflicts resolve by
 **newest-wins** (the most recently edited copy overwrites the other), so you can
 edit on a laptop and a phone and they converge.
+
+A freshly-opened device that hasn't been edited never counts as "newer", so
+connecting a new device **pulls** your existing plan rather than overwriting it.
+If a device genuinely does have newer edits when you first connect it, the app
+**asks** before overwriting the Drive copy. (Drive also keeps file version
+history as a backstop.)
 
 Notes:
 
