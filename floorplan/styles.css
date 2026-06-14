@@ -86,6 +86,17 @@ button.danger:hover:not(:disabled) {
   border-color: var(--danger);
   color: var(--danger);
 }
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+button.primary:hover:not(:disabled) {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #fff;
+}
 
 .layout-label {
   font-size: 12px;
