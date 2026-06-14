@@ -414,36 +414,57 @@
     return out;
   }
 
-  // Lay out one wall's openings against its cut-outs, keeping each opening's
-  // object so a drag can find its neighbours.
-  function wallLayout(room, side) {
-    const S = SIDES[side];
-    const wallLen = S.len(room);
-    const cutouts = (room.notches || []).filter((n) => n.side === side).map((n) => [n.pos, n.pos + n.width]);
-    const ops = (room.openings || []).filter((o) => o.side === side);
-    const placed = layoutWallOpenings(wallLen, cutouts, ops).map((p, i) => ({ ...p, op: ops[i] }));
-    return { S, wallLen, cutouts, ops, placed };
+  // The wall segments an opening can sit on: each base wall (with its cut-outs
+  // as obstacles), plus the front face of every cut-out/cut-in. Each segment
+  // carries its local start point, direction, length, inward normal, and the
+  // openings assigned to it.
+  function roomSegments(room) {
+    const segs = [];
+    for (const side of ["top", "right", "bottom", "left"]) {
+      const S = SIDES[side];
+      const dir = S.dir;
+      const [sx, sy] = S.start(room);
+      segs.push({
+        side, dir, sx, sy, len: S.len(room), inward: [-dir[1], dir[0]],
+        cutouts: (room.notches || []).filter((n) => n.side === side).map((n) => [n.pos, n.pos + n.width]),
+        ops: (room.openings || []).filter((o) => o.side === side && !o.notch),
+      });
+    }
+    for (const n of room.notches || []) {
+      const S = SIDES[n.side];
+      const dir = S.dir;
+      const out = [dir[1], -dir[0]]; // outward from the base wall
+      const [bx, by] = S.start(room);
+      // The face runs parallel to the wall, offset by the notch depth.
+      const px = bx + dir[0] * n.pos + out[0] * n.depth;
+      const py = by + dir[1] * n.pos + out[1] * n.depth;
+      segs.push({
+        notchId: n.id, side: n.side, dir, sx: px, sy: py, len: n.width, inward: [-dir[1], dir[0]],
+        cutouts: [], ops: (room.openings || []).filter((o) => o.notch === n.id),
+      });
+    }
+    return segs;
+  }
+
+  function layoutSegment(seg) {
+    return layoutWallOpenings(seg.len, seg.cutouts, seg.ops).map((p, i) => ({ ...p, op: seg.ops[i] }));
   }
 
   function drawOpenings(g, room) {
     if (!(room.openings || []).length) return;
-    for (const side of ["top", "right", "bottom", "left"]) {
-      const L = wallLayout(room, side);
-      if (!L.placed.length) continue;
-      const [sx, sy] = L.S.start(room);
-      const dir = L.S.dir;
-      const inward = [-dir[1], dir[0]]; // unit vector pointing into the room
-      const at = (m) => worldToScreen(room.x + sx + dir[0] * m, room.y + sy + dir[1] * m);
-      for (const p of L.placed) {
-        const a = clamp(p.start, 0, L.wallLen), b = clamp(p.end, 0, L.wallLen);
+    for (const seg of roomSegments(room)) {
+      if (!seg.ops.length) continue;
+      const at = (m) => worldToScreen(room.x + seg.sx + seg.dir[0] * m, room.y + seg.sy + seg.dir[1] * m);
+      for (const p of layoutSegment(seg)) {
+        const a = clamp(p.start, 0, seg.len), b = clamp(p.end, 0, seg.len);
         if (b - a < 0.5) continue;
         const p1 = at(a), p2 = at(b);
-        if (p.type === "door") drawDoor(g, p1, p2, inward, room.id, p.op.id, p.hinge, p.swing);
-        else drawWindow(g, p1, p2, inward, room.id, p.op.id);
+        if (p.type === "door") drawDoor(g, p1, p2, seg.inward, room.id, p.op.id, p.hinge, p.swing);
+        else drawWindow(g, p1, p2, seg.inward, room.id, p.op.id);
         // While dragging this opening, show the clear gap on each side.
         if (drag && drag.type === "opening" && drag.op === p.op) {
-          drawGapLabel(g, at, inward, drag.prevEnd, p.start);
-          drawGapLabel(g, at, inward, p.end, drag.nextStart);
+          drawGapLabel(g, at, seg.inward, drag.prevEnd, p.start);
+          drawGapLabel(g, at, seg.inward, p.end, drag.nextStart);
         }
       }
     }
@@ -796,17 +817,19 @@
     if (!room) return;
     const op = (room.openings || []).find((o) => o.id === opId);
     if (!op) return;
-    const L = wallLayout(room, op.side);
-    const P = L.placed.find((p) => p.op === op);
+    const seg = roomSegments(room).find((s) => s.ops.includes(op));
+    if (!seg) return;
+    const placed = layoutSegment(seg);
+    const P = placed.find((p) => p.op === op);
     if (!P) return;
-    const feats = L.cutouts
+    const feats = seg.cutouts
       .map(([s, e]) => ({ s, e, op: null }))
-      .concat(L.placed.filter((p) => p.op !== op).map((p) => ({ s: p.start, e: p.end, op: p.op })));
-    let prevEnd = 0, nextStart = L.wallLen, nextOp = null;
+      .concat(placed.filter((p) => p.op !== op).map((p) => ({ s: p.start, e: p.end, op: p.op })));
+    let prevEnd = 0, nextStart = seg.len, nextOp = null;
     for (const f of feats) if (f.e <= P.start + 0.5) prevEnd = Math.max(prevEnd, f.e);
     for (const f of feats) if (f.s >= P.end - 0.5 && f.s < nextStart) { nextStart = f.s; nextOp = f.op; }
     drag = {
-      type: "opening", room, op, S: L.S, width: P.end - P.start,
+      type: "opening", room, op, dir: seg.dir, width: P.end - P.start,
       prevEnd, nextStart, nextOp, grabStart: P.start, startMx: gmx, startMy: gmy, moved: false,
     };
   }
@@ -846,7 +869,7 @@
     }
 
     if (drag.type === "opening") {
-      const dir = drag.S.dir; // unit along the wall (axis-aligned)
+      const dir = drag.dir; // unit along the wall/face (axis-aligned)
       const along = ((mx - drag.startMx) * dir[0] + (my - drag.startMy) * dir[1]) / view.scale;
       if (!drag.moved && Math.abs(along * view.scale) < TAP_SLOP) return;
       drag.moved = true;
@@ -1239,7 +1262,7 @@
     grid.className = "wall-grid";
     grid.append(
       openingField(o, "type", "Type", "type"),
-      openingField(o, "side", "Wall", "select"),
+      openingLocationField(room, o),
       openingField(o, "gap", "Gap (cm)", "number"),
       openingField(o, "width", "Width (cm)", "number")
     );
@@ -1248,6 +1271,41 @@
     }
     li.append(head, grid);
     return li;
+  }
+
+  // Location selector: a base wall, or the face of a cut-out/cut-in.
+  function openingLocationField(room, o) {
+    const wrapEl = document.createElement("label");
+    const span = document.createElement("span");
+    span.textContent = "On";
+    const sel = document.createElement("select");
+    const add = (val, text) => {
+      const opt = document.createElement("option");
+      opt.value = val; opt.textContent = text;
+      sel.appendChild(opt);
+    };
+    for (const s of ["top", "right", "bottom", "left"]) add("wall:" + s, SIDE_LABELS[s]);
+    (room.notches || []).forEach((n, idx) => {
+      add("notch:" + n.id, SIDE_LABELS[n.side] + " · " + (n.depth < 0 ? "cut-in" : "cut-out") + " " + (idx + 1) + " face");
+    });
+    sel.value = o.notch ? "notch:" + o.notch : "wall:" + o.side;
+    sel.addEventListener("change", (e) => {
+      const v = e.target.value;
+      if (v.startsWith("notch:")) {
+        const id = v.slice(6);
+        const n = (room.notches || []).find((x) => x.id === id);
+        o.notch = id;
+        if (n) o.side = n.side;
+      } else {
+        o.notch = null;
+        o.side = v.slice(5);
+      }
+      save();
+      render();
+      refreshPanel();
+    });
+    wrapEl.append(span, sel);
+    return wrapEl;
   }
 
   function moveOpening(room, i, dir) {
@@ -1306,7 +1364,7 @@
     const room = r.room;
     if (!room.openings) room.openings = [];
     const lastSide = room.openings.length ? room.openings[room.openings.length - 1].side : "top";
-    room.openings.push({ id: uid("op"), type, side: lastSide, hinge: "start", swing: "out", gap: 50, width: type === "door" ? 80 : 120 });
+    room.openings.push({ id: uid("op"), type, side: lastSide, notch: null, hinge: "start", swing: "out", gap: 50, width: type === "door" ? 80 : 120 });
     save();
     render();
     refreshPanel();
@@ -1670,6 +1728,8 @@
           id: o.id || uid("op"),
           type: o.type === "window" ? "window" : "door",
           side: o.side,
+          // Optional: id of the cut-out/cut-in whose face this opening sits on.
+          notch: o.notch ? String(o.notch) : null,
           hinge: o.hinge === "end" ? "end" : "start",
           swing: o.swing === "in" ? "in" : "out",
           gap: Math.max(0, Math.round(+o.gap || 0)),
