@@ -660,6 +660,11 @@
   svg.addEventListener("pointermove", onPointerMove);
   svg.addEventListener("pointerup", onPointerUp);
   svg.addEventListener("pointercancel", onPointerUp);
+  // Desktop: double-click an edge length to edit it inline.
+  svg.addEventListener("dblclick", (e) => {
+    const t = e.target.closest('[data-kind="edge"]');
+    if (t) { e.preventDefault(); openEdgeEditor(t, e); }
+  });
 
   function onPointerDown(e) {
     // iOS Safari can drop a pointerup/pointercancel, leaving a stale pointer in
@@ -689,23 +694,25 @@
     }
 
     const target = e.target.closest("[data-kind]");
+    const kind = target ? target.getAttribute("data-kind") : null;
+
+    // Editing an edge length: tap on touch, double-click on desktop (handled by
+    // the dblclick listener). Handled before capturing the pointer — capturing
+    // would suppress the desktop click/dblclick — and works even when locked.
+    if (kind === "edge") {
+      if (e.pointerType !== "mouse") openEdgeEditor(target, e);
+      return;
+    }
+
     try { svg.setPointerCapture(e.pointerId); } catch (_) {}
 
-    if (!target || target.getAttribute("data-kind") === undefined) {
+    if (!target) {
       startPan(e);
       return;
     }
-    const kind = target.getAttribute("data-kind");
     const roomId = target.getAttribute("data-room");
     const objId = target.getAttribute("data-obj");
     const [gmx, gmy] = mousePos(e);
-
-    // Editing an edge length is a deliberate tap on a number, not an accidental
-    // drag — so it's always available, even when the canvas is locked.
-    if (kind === "edge") {
-      openEdgeEditor(target, e);
-      return;
-    }
 
     if (locked) {
       // View/select only: open the item in the side panel for editing, but
@@ -862,7 +869,6 @@
     if (!room) return;
     const item = objId ? room.objects.find((o) => o.id === objId) : room;
     if (!item) return;
-    select(objId ? { kind: "object", roomId, objId } : { kind: "room", roomId });
 
     // Recompute the edge so we have its current length and its setter `ctl`.
     const edge = itemLocalGeometry(item).edges[edgeIdx];
@@ -907,7 +913,12 @@
       if (ev.key === "Enter") commit();
       else if (ev.key === "Escape") cancel();
     });
-    input.addEventListener("blur", commit);
+    // Ignore the blur caused by the opening tap itself (notably on iOS, where it
+    // would close the box before you can type); arm real blur-to-commit shortly
+    // after it's open.
+    let armed = false;
+    setTimeout(() => { armed = true; }, 400);
+    input.addEventListener("blur", () => { if (armed) commit(); });
     edgeEditor = input;
   }
   function closeEdgeEditor() {
