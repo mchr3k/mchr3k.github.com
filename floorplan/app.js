@@ -377,8 +377,11 @@
     if ((wi < words.length || cur) && lines.length) {
       let last = lines[lines.length - 1];
       if (!last.endsWith("…")) {
-        last = measureText(last + "…", size, weight) <= availW ? last + "…" : ellipsizeTo(last + "x", availW, size, weight);
-        lines[lines.length - 1] = last;
+        // Always end with a real ellipsis to signal dropped words. Trim chars
+        // off the line until "trimmed…" fits — never append a sentinel letter.
+        let s = last;
+        while (s && measureText(s + "…", size, weight) > availW) s = s.slice(0, -1);
+        lines[lines.length - 1] = (s || last) + "…";
       }
     }
     return lines.length ? lines : null;
@@ -1759,6 +1762,43 @@
     refreshPanel();
   }
 
+  // Copy/paste duplicates via an in-app clipboard (not the OS clipboard), so
+  // Ctrl/Cmd+C then Ctrl/Cmd+V drops a copy — paste repeatedly for more.
+  let clipboard = null;
+
+  function copySel() {
+    const r = resolveSel();
+    if (!r) return;
+    clipboard = r.kind === "object"
+      ? { kind: "object", data: JSON.parse(JSON.stringify(r.obj)), roomId: r.room.id }
+      : { kind: "room", data: JSON.parse(JSON.stringify(r.room)) };
+  }
+
+  function pasteClipboard() {
+    if (!clipboard) return;
+    if (clipboard.kind === "object") {
+      const r = resolveSel();
+      const room = (r && r.room) || state.rooms.find((rm) => rm.id === clipboard.roomId) || state.rooms[0];
+      if (!room) return;
+      const clone = { ...clipboard.data, id: uid("o"), x: (clipboard.data.x || 0) + 20, y: (clipboard.data.y || 0) + 20 };
+      room.objects.push(clone);
+      save();
+      select({ kind: "object", roomId: room.id, objId: clone.id });
+    } else {
+      const src = clipboard.data;
+      const clone = {
+        ...src, id: uid("r"), name: src.name + " copy",
+        x: (src.x || 0) + 30, y: (src.y || 0) + 30,
+        notches: (src.notches || []).map(cloneNotch),
+        openings: (src.openings || []).map((o) => ({ ...o, id: uid("op") })),
+        objects: (src.objects || []).map((o) => ({ ...o, id: uid("o") })),
+      };
+      state.rooms.push(clone);
+      save();
+      select({ kind: "room", roomId: clone.id });
+    }
+  }
+
   function duplicateSel() {
     const r = resolveSel();
     if (!r) return;
@@ -2890,6 +2930,8 @@
     if ((e.key === "Delete" || e.key === "Backspace") && r) { e.preventDefault(); deleteSel(); }
     else if (e.key.toLowerCase() === "r" && r && r.kind === "object") { rotateSel(); }
     else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d" && r) { e.preventDefault(); duplicateSel(); }
+    else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c" && r) { e.preventDefault(); copySel(); }
+    else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v" && clipboard) { e.preventDefault(); pasteClipboard(); }
     else if (e.key === "Escape") select(null);
     else if (e.key.startsWith("Arrow") && r) {
       e.preventDefault();
