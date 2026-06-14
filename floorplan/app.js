@@ -347,6 +347,43 @@
     return null;
   }
 
+  function ellipsizeTo(word, availPx, size, weight) {
+    if (measureText(word, size, weight) <= availPx) return word;
+    for (let n = word.length - 1; n >= 1; n--) {
+      const s = word.slice(0, n) + "…";
+      if (measureText(s, size, weight) <= availPx) return s;
+    }
+    return "…";
+  }
+
+  // Wrap a name at word boundaries to fit availW × availH. A too-long word is
+  // ellipsised, and the last line gets an ellipsis if words are left over.
+  // Returns an array of lines, or null if nothing fits.
+  function wrapLabel(name, availW, availH, size, weight) {
+    name = String(name || "").trim();
+    if (!name || availW < 10) return null;
+    const lineH = size * 1.2;
+    const maxLines = Math.max(1, Math.floor(availH / lineH));
+    const words = name.split(/\s+/);
+    const lines = [];
+    let cur = "", wi = 0;
+    for (; wi < words.length; wi++) {
+      const cand = cur ? cur + " " + words[wi] : words[wi];
+      if (measureText(cand, size, weight) <= availW) { cur = cand; continue; }
+      if (cur) { lines.push(cur); cur = ""; if (lines.length >= maxLines) break; }
+      cur = ellipsizeTo(words[wi], availW, size, weight);
+    }
+    if (cur && lines.length < maxLines) { lines.push(cur); cur = ""; wi = words.length; }
+    if ((wi < words.length || cur) && lines.length) {
+      let last = lines[lines.length - 1];
+      if (!last.endsWith("…")) {
+        last = measureText(last + "…", size, weight) <= availW ? last + "…" : ellipsizeTo(last + "x", availW, size, weight);
+        lines[lines.length - 1] = last;
+      }
+    }
+    return lines.length ? lines : null;
+  }
+
   // The leftmost non-degenerate interior horizontal span [x0,x1] of the outline
   // at screen-y `y` (so the label respects a cut-in eating into that row), or
   // null if the line misses the polygon's interior.
@@ -370,12 +407,13 @@
   // several rows so a cut-in intruding into the *top* of the text still pushes
   // it right or down. Drops to a lower band when squeezed, contracting to two
   // characters before giving up.
-  function roomLabelPlacement(corners, name) {
+  function roomLabelPlacement(corners, name, objRects) {
     const ys = corners.map((p) => p[1]);
     const minY = Math.min(...ys), maxY = Math.max(...ys);
     if (maxY - minY < 24) return null;
     const pad = 6;
-    for (const dy of [21, 44, 67]) {
+    let fallback = null;
+    for (const dy of [21, 44, 67, 90, 113]) {
       const baseline = minY + dy;
       if (baseline > maxY - 3) break;
       let L = -Infinity, R = Infinity, ok = true;
@@ -387,9 +425,20 @@
       }
       if (!ok || R - L < 14) continue;
       const text = fitLabel(name, R - L - pad * 2, 15, 700, 2);
-      if (text) return { x: L + pad, y: baseline, text };
+      if (!text) continue;
+      const place = { x: L + pad, y: baseline, text };
+      // Remember the first band that fits so the name always shows somewhere,
+      // but prefer a band that doesn't sit on top of a room object.
+      if (!fallback) fallback = place;
+      if (objRects && objRects.length) {
+        const tw = measureText(text, 15, 700);
+        const rect = { x0: L + pad, x1: L + pad + tw, y0: baseline - 13, y1: baseline + 4 };
+        const hit = objRects.some((o) => rect.x0 < o.x1 && rect.x1 > o.x0 && rect.y0 < o.y1 && rect.y1 > o.y0);
+        if (hit) continue;
+      }
+      return place;
     }
-    return null;
+    return fallback;
   }
 
   // Resolve where each opening sits along a wall (cm from the wall's start
@@ -580,8 +629,14 @@
       })
     );
 
-    // Room name — tucked into the top-left interior, cut-out/zoom aware.
-    const place = roomLabelPlacement(geo.corners, room.name);
+    // Room name — tucked into the top-left interior, cut-out/zoom aware, and
+    // nudged to a lower band when it would land on top of a room object.
+    const objRects = (room.objects || []).map((o) => {
+      const c = itemGeometry(room, o, o.rot || 0).corners;
+      const xs = c.map((p) => p[0]), oys = c.map((p) => p[1]);
+      return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...oys), y1: Math.max(...oys) };
+    });
+    const place = roomLabelPlacement(geo.corners, room.name, objRects);
     if (place) {
       g.appendChild(textLabel(place.x, place.y, place.text, { weight: 700, size: 15, fill: "#1f2933" }));
     }
@@ -617,20 +672,182 @@
       })
     );
 
-    // Object name, centred — contracted with an ellipsis to fit the object's
-    // width, hidden only once fewer than ~5 real characters would fit.
-    const objName = fitLabel(obj.name, obj.w * view.scale - 8, 13, 600, 2);
-    if (objName && obj.h * view.scale > 18) {
-      g.appendChild(
-        textLabel(geo.center[0], geo.center[1] + 4, objName, {
-          weight: 600, size: 13, fill: "#1f2933", anchor: "middle",
-        })
-      );
-    }
+    drawObjectName(g, obj, geo.center);
 
     collectEdgeLabels(geo, room.id, obj.id, sel, room.color);
+    if (drag && drag.type === "object" && drag.obj === obj) {
+      if (drag.snapGuides) drawSnapGuides(g, room, drag.snapGuides);
+      drawObjectClearances(g, room, obj);
+    }
     if (sel) drawHandles(g, geo);
     svg.appendChild(g);
+  }
+
+  // X / Y where the room outline crosses a horizontal / vertical line (local cm).
+  function polyCrossingsX(poly, y) {
+    const xs = [];
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length];
+      if ((a[1] <= y && b[1] > y) || (b[1] <= y && a[1] > y)) xs.push(a[0] + ((y - a[1]) / (b[1] - a[1])) * (b[0] - a[0]));
+    }
+    return xs;
+  }
+  function polyCrossingsY(poly, x) {
+    const ys = [];
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length];
+      if ((a[0] <= x && b[0] > x) || (b[0] <= x && a[0] > x)) ys.push(a[1] + ((x - a[0]) / (b[0] - a[0])) * (b[1] - a[1]));
+    }
+    return ys;
+  }
+
+  // While dragging an object, show the clear distance from each of its sides to
+  // the nearest obstacle on that side — whichever comes first within the side's
+  // projected band: another object, or the room wall (following the outline, so
+  // cut-ins read closer and cut-outs further).
+  function drawObjectClearances(g, room, obj) {
+    const poly = itemLocalGeometry(room).points;
+    const a = objAABBAt(obj, obj.x, obj.y);
+    const others = room.objects.filter((o) => o.id !== obj.id).map((o) => objAABBAt(o, o.x, o.y));
+    const at = (lx, ly) => worldToScreen(room.x + lx, room.y + ly);
+    const cxm = (a.left + a.right) / 2, cym = (a.top + a.bottom) / 2;
+    const band = (lo, hi) => [0, 0.25, 0.5, 0.75, 1].map((k) => lo + (hi - lo) * k);
+    const overlapY = (o) => o.top < a.bottom - 0.5 && o.bottom > a.top + 0.5;
+    const overlapX = (o) => o.left < a.right - 0.5 && o.right > a.left + 0.5;
+
+    // right
+    let e = Infinity;
+    for (const y of band(a.top, a.bottom)) { const xs = polyCrossingsX(poly, y).filter((x) => x > a.right + 0.01); if (xs.length) e = Math.min(e, ...xs); }
+    for (const o of others) if (overlapY(o) && o.left >= a.right - 0.01) e = Math.min(e, o.left);
+    if (isFinite(e)) drawClearLabel(g, at((a.right + e) / 2, cym), Math.round(e - a.right));
+    // left
+    e = -Infinity;
+    for (const y of band(a.top, a.bottom)) { const xs = polyCrossingsX(poly, y).filter((x) => x < a.left - 0.01); if (xs.length) e = Math.max(e, ...xs); }
+    for (const o of others) if (overlapY(o) && o.right <= a.left + 0.01) e = Math.max(e, o.right);
+    if (isFinite(e)) drawClearLabel(g, at((a.left + e) / 2, cym), Math.round(a.left - e));
+    // bottom
+    e = Infinity;
+    for (const x of band(a.left, a.right)) { const ys = polyCrossingsY(poly, x).filter((y) => y > a.bottom + 0.01); if (ys.length) e = Math.min(e, ...ys); }
+    for (const o of others) if (overlapX(o) && o.top >= a.bottom - 0.01) e = Math.min(e, o.top);
+    if (isFinite(e)) drawClearLabel(g, at(cxm, (a.bottom + e) / 2), Math.round(e - a.bottom));
+    // top
+    e = -Infinity;
+    for (const x of band(a.left, a.right)) { const ys = polyCrossingsY(poly, x).filter((y) => y < a.top - 0.01); if (ys.length) e = Math.max(e, ...ys); }
+    for (const o of others) if (overlapX(o) && o.bottom <= a.top + 0.01) e = Math.max(e, o.bottom);
+    if (isFinite(e)) drawClearLabel(g, at(cxm, (a.top + e) / 2), Math.round(a.top - e));
+  }
+
+  function drawClearLabel(g, pt, cm) {
+    if (cm < 0) return;
+    const txt = cm + " cm";
+    const wpx = measureText(txt, 11) + 10;
+    const [x, y] = pt;
+    g.appendChild(svgEl("rect", { x: x - wpx / 2, y: y - 9, width: wpx, height: 18, rx: 4, fill: "#e0ecff", "fill-opacity": 0.96, stroke: "#2563eb", "stroke-width": 1, style: "pointer-events:none" }));
+    g.appendChild(svgEl("text", { x, y: y + 4, "font-size": 11, "text-anchor": "middle", fill: "#1e3a8a", "font-family": "system-ui, sans-serif", style: "pointer-events:none" }, txt));
+  }
+
+  // Axis-aligned bounding box (local cm) of an object at (x,y), honouring rotation.
+  function objAABBAt(obj, x, y) {
+    const rot = obj.rot || 0;
+    const cx = x + obj.w / 2, cy = y + obj.h / 2;
+    const base = [[x, y], [x + obj.w, y], [x + obj.w, y + obj.h], [x, y + obj.h]];
+    const c = rot ? base.map(([px, py]) => rotatePoint(px, py, cx, cy, rot)) : base;
+    return { left: Math.min(...c.map((p) => p[0])), right: Math.max(...c.map((p) => p[0])), top: Math.min(...c.map((p) => p[1])), bottom: Math.max(...c.map((p) => p[1])) };
+  }
+
+  // Snap a dragged object so an edge/centre lines up with another object's
+  // edge/centre or a room wall, when within threshold. Returns {x,y,guides}.
+  function snapObjectEdges(room, obj, nx, ny) {
+    const thr = 7 / view.scale;
+    const xT = [0, room.w], yT = [0, room.h];
+    // Every room-outline coordinate is a snap target, so objects align to walls
+    // and cut-in/out edges, not just the base rectangle.
+    for (const [px, py] of itemLocalGeometry(room).points) { xT.push(px); yT.push(py); }
+    for (const o of room.objects) {
+      if (o.id === obj.id) continue;
+      const a = objAABBAt(o, o.x, o.y);
+      xT.push(a.left, a.right, (a.left + a.right) / 2);
+      yT.push(a.top, a.bottom, (a.top + a.bottom) / 2);
+    }
+    const m = objAABBAt(obj, nx, ny);
+    const guides = {};
+    let bx = nx, bdx = thr;
+    for (const edge of [m.left, m.right, (m.left + m.right) / 2]) {
+      for (const t of xT) { const d = Math.abs(edge - t); if (d < bdx) { bdx = d; bx = nx + (t - edge); guides.x = t; } }
+    }
+    let by = ny, bdy = thr;
+    for (const edge of [m.top, m.bottom, (m.top + m.bottom) / 2]) {
+      for (const t of yT) { const d = Math.abs(edge - t); if (d < bdy) { bdy = d; by = ny + (t - edge); guides.y = t; } }
+    }
+    return { x: Math.round(bx), y: Math.round(by), guides };
+  }
+
+  function drawSnapGuides(g, room, guides) {
+    const at = (lx, ly) => worldToScreen(room.x + lx, room.y + ly);
+    const line = (p1, p2) => g.appendChild(svgEl("line", { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1], stroke: "#db2777", "stroke-width": 1, "stroke-dasharray": "4 3", style: "pointer-events:none" }));
+    if (guides.x != null) line(at(guides.x, 0), at(guides.x, room.h));
+    if (guides.y != null) line(at(0, guides.y), at(room.w, guides.y));
+  }
+
+  // Is a world point inside a room's outline (accounting for cut-ins/outs)?
+  function roomContainsPoint(room, wx, wy) {
+    const poly = itemLocalGeometry(room).points;
+    const x = wx - room.x, y = wy - room.y;
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
+      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+  function reparentObject(fromRoom, obj, toRoom) {
+    const i = fromRoom.objects.indexOf(obj);
+    if (i >= 0) fromRoom.objects.splice(i, 1);
+    const wx = fromRoom.x + obj.x, wy = fromRoom.y + obj.y;
+    obj.x = Math.round(wx - toRoom.x);
+    obj.y = Math.round(wy - toRoom.y);
+    toRoom.objects.push(obj);
+  }
+
+  // Object name, word-wrapped to fit the box. If it can't fit left-to-right and
+  // the box is taller than it is wide, the text is rotated to read bottom-to-top
+  // along the long axis (where there's more room).
+  function drawObjectName(g, obj, center) {
+    const rot0 = obj.rot || 0;
+    const wPx = ((rot0 === 90 || rot0 === 270 ? obj.h : obj.w) * view.scale);
+    const hPx = ((rot0 === 90 || rot0 === 270 ? obj.w : obj.h) * view.scale);
+    const weight = 600;
+    // Word-wrap and, if needed, rotate the name to read bottom-to-top. If it
+    // still won't fit, step the font down to a readable floor (9px) rather than
+    // hide the name — a small full name beats no name. Prefer the largest size
+    // that shows the whole name; otherwise the smallest readable size.
+    const layoutAt = (size) => {
+      const fitsHoriz = measureText(obj.name, size, weight) <= wPx - 8;
+      const vertical = !fitsHoriz && hPx > wPx;
+      const lines = wrapLabel(obj.name, (vertical ? hPx : wPx) - 8, (vertical ? wPx : hPx) - 4, size, weight);
+      if (!lines) return null;
+      return { size, vertical, lines, clipped: lines.some((l) => l.includes("…")) };
+    };
+    let chosen = null, smallest = null;
+    for (const s of [13, 12, 11, 10, 9]) {
+      const lay = layoutAt(s);
+      if (!lay) continue;
+      smallest = lay;
+      if (!lay.clipped) { chosen = lay; break; }
+    }
+    const pick = chosen || smallest;
+    if (!pick) return;
+    const { size, vertical, lines } = pick;
+    const lineH = size * 1.2;
+    const startY = center[1] - ((lines.length - 1) * lineH) / 2 + size * 0.35;
+    const attrs = {
+      "text-anchor": "middle", "font-size": size, "font-weight": weight, fill: "#1f2933",
+      "font-family": "system-ui, sans-serif", style: "pointer-events:none; user-select:none",
+    };
+    if (vertical) attrs.transform = `rotate(-90 ${center[0].toFixed(1)} ${center[1].toFixed(1)})`;
+    const t = svgEl("text", attrs);
+    lines.forEach((ln, i) => t.appendChild(svgEl("tspan", { x: center[0], y: startY + i * lineH }, ln)));
+    g.appendChild(t);
   }
 
   function textLabel(x, y, str, opt = {}) {
@@ -904,8 +1121,13 @@
     const dx = wx - drag.grabX;
     const dy = wy - drag.grabY;
     if (drag.type === "object") {
-      drag.obj.x = snapVal(drag.startX + dx);
-      drag.obj.y = snapVal(drag.startY + dy);
+      let nx = snapVal(drag.startX + dx), ny = snapVal(drag.startY + dy);
+      if (ui.snap) {
+        const s = snapObjectEdges(drag.room, drag.obj, nx, ny); // align with other objects / walls
+        nx = s.x; ny = s.y; drag.snapGuides = s.guides;
+      } else drag.snapGuides = null;
+      drag.obj.x = nx;
+      drag.obj.y = ny;
     } else if (drag.type === "room") {
       drag.room.x = snapVal(drag.startX + dx);
       drag.room.y = snapVal(drag.startY + dy);
@@ -920,22 +1142,32 @@
       try { svg.releasePointerCapture(e.pointerId); } catch (_) {}
     }
     if (pointers.size < 2) pinch = null;
-    if (drag) {
-      if (drag.type === "pan") {
+    const d = drag;
+    drag = null; // cleared first so the final render drops live guides/clearances
+    if (d) {
+      if (d.type === "pan") {
         // Panning doesn't mutate content. A locked tap (no pan) on the already-
         // selected item deselects it.
-        if (!drag.moved && drag.lockSel && drag.wasSelected) select(null);
-      } else if (drag.type === "opening") {
-        if (drag.moved) { save(); render(); refreshPanel(); } // drop the live gap labels + sync the panel
-      } else if (drag.moved) {
+        if (!d.moved && d.lockSel && d.wasSelected) select(null);
+      } else if (d.moved) {
+        // Dropping an object inside a different room re-parents it there.
+        if (d.type === "object") {
+          const cw = d.room.x + d.obj.x + d.obj.w / 2, ch = d.room.y + d.obj.y + d.obj.h / 2;
+          const target = state.rooms.find((r) => r !== d.room && roomContainsPoint(r, cw, ch));
+          if (target) {
+            reparentObject(d.room, d.obj, target);
+            if (selection && selection.kind === "object" && selection.objId === d.obj.id) selection.roomId = target.id;
+          }
+        }
         save();
-      } else if (drag.wasSelected) {
+        render();
+        refreshPanel();
+      } else if (d.wasSelected) {
         // Tap (no drag) on the already-selected item clears the selection — a
         // reliable way to deselect on touch, where empty canvas is scarce.
         select(null);
       }
     }
-    drag = null;
   }
 
   function dist(a, b) {
@@ -2066,7 +2298,19 @@
     let sessionMode = "local";
 
     const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (_) {} };
-    function setLastSeenRev(r) { lastSeenRev = Math.max(lastSeenRev, +r || 0); lsSet(LS.lastRev, String(lastSeenRev)); }
+    function setLastSeenRev(r) { lastSeenRev = Math.max(lastSeenRev, +r || 0); lsSet(LS.lastRev, String(lastSeenRev)); markSaved(); }
+    // Every sync success runs through setLastSeenRev, so this is when local and
+    // Drive are in step.
+    let lastSavedAt = 0;
+    function markSaved() { lastSavedAt = Date.now(); pill(); }
+    function agoText(ms) {
+      const s = Math.max(0, Math.round(ms / 1000));
+      if (s < 60) return s + "s ago";
+      const m = Math.round(s / 60);
+      if (m < 60) return m + "m ago";
+      const h = Math.round(m / 60);
+      return h < 24 ? h + "h ago" : Math.round(h / 24) + "d ago";
+    }
     // Monotonic revision for the next local edit (Lamport clock): always greater
     // than any revision this device has observed, so ordering survives clock skew.
     function nextRev() { return Math.max(+doc.rev || 0, lastSeenRev) + 1; }
@@ -2082,6 +2326,7 @@
       const b = el("btn-drive");
       if (!b) return;
       b.classList.toggle("active", connected);
+      b.textContent = "☁ Drive sync" + (lastSavedAt ? " · saved " + agoText(Date.now() - lastSavedAt) : "");
       b.title = connected ? "Google Drive: connected" : "Google Drive: not connected";
     }
     function updateUI() {
@@ -2611,6 +2856,7 @@
     function boot() {
       bindEvents();
       updateUI();
+      setInterval(() => { if (lastSavedAt) pill(); }, 15000); // keep "saved N ago" fresh
       // Loading from Drive is now driven by the first-load prompt (useDrive),
       // so the user consciously chooses Drive vs local on every load.
     }
