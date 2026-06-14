@@ -131,6 +131,19 @@ button.danger:hover:not(:disabled) {
   touch-action: none; /* we handle pan/zoom ourselves */
 }
 
+/* When locked, items aren't draggable — show a grab cursor, not a move one. */
+#canvas.locked [data-kind="room"],
+#canvas.locked [data-kind="object"],
+#canvas.locked [data-kind="edge"] {
+  cursor: grab !important;
+}
+
+#btn-lock.locked {
+  border-color: #f59e0b;
+  color: #b45309;
+  background: #fffbeb;
+}
+
 #canvas {
   display: block;
   width: 100%;

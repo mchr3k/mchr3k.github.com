@@ -37,6 +37,10 @@
   let ui = { grid: true, snap: true, edges: true, gridCm: 10 };
   /** @type {{kind:'room'|'object', roomId:string, objId?:string}|null} */
   let selection = null;
+  // When locked, the canvas is view/select-only: dragging pans and edge labels
+  // just select, so nothing can be moved or edited by accident. Pan/zoom and the
+  // side panel still work. Defaults on per device (set in boot()).
+  let locked = false;
 
   const SVGNS = "http://www.w3.org/2000/svg";
   const PALETTE = ["#c7d2fe", "#bbf7d0", "#fde68a", "#fecaca", "#bae6fd", "#ddd6fe", "#fbcfe8"];
@@ -256,9 +260,17 @@
 
     if (ui.grid) drawGrid(W, H);
 
+    labelCandidates = [];
     for (const room of state.rooms) {
       drawRoom(room);
       for (const obj of room.objects) drawObject(room, obj);
+    }
+    // Edge labels go in a single top layer so they sit above every shape and
+    // their overlaps can be resolved globally.
+    if (labelCandidates.length) {
+      const layer = svgEl("g", { class: "edge-labels" });
+      placeEdgeLabels(layer);
+      svg.appendChild(layer);
     }
   }
 
@@ -302,15 +314,65 @@
     return corners.map((c) => `${c[0].toFixed(1)},${c[1].toFixed(1)}`).join(" ");
   }
 
-  // Fit a name into `availPx` of on-screen width at the given font size.
-  // Returns the full name if it fits, an ellipsised version while at least
-  // `minChars` real characters still fit, or null when it's too small to show.
-  function fitLabel(name, availPx, size, minChars) {
-    const charW = size * 0.6; // rough per-character width
-    const maxChars = Math.floor(availPx / charW);
-    if (maxChars >= name.length) return name;
-    if (maxChars - 1 >= minChars) return name.slice(0, maxChars - 1) + "…";
+  // Measure real rendered text width (cached 2D context), so labels contract
+  // only when they genuinely don't fit — not on a conservative guess.
+  const _measureCtx = document.createElement("canvas").getContext("2d");
+  function measureText(str, size, weight) {
+    _measureCtx.font = `${weight || 400} ${size}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+    return _measureCtx.measureText(str).width;
+  }
+
+  // Fit a name into `availPx`: the full name if it measures within, otherwise
+  // the longest ellipsised prefix that fits while keeping >= `minChars` real
+  // characters, or null when it's too small to show.
+  function fitLabel(name, availPx, size, weight, minChars) {
+    if (measureText(name, size, weight) <= availPx) return name;
+    for (let n = name.length - 1; n >= minChars; n--) {
+      const s = name.slice(0, n) + "…";
+      if (measureText(s, size, weight) <= availPx) return s;
+    }
     return null;
+  }
+
+  // Area centroid of a polygon (screen coords); falls back to the vertex
+  // average for degenerate cases.
+  function polygonCentroid(pts) {
+    let a = 0, cx = 0, cy = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const [x0, y0] = pts[i], [x1, y1] = pts[(i + 1) % pts.length];
+      const cross = x0 * y1 - x1 * y0;
+      a += cross; cx += (x0 + x1) * cross; cy += (y0 + y1) * cross;
+    }
+    a *= 0.5;
+    if (Math.abs(a) < 1e-6) {
+      const n = pts.length;
+      return [pts.reduce((s, p) => s + p[0], 0) / n, pts.reduce((s, p) => s + p[1], 0) / n];
+    }
+    return [cx / (6 * a), cy / (6 * a)];
+  }
+  function pointInPoly(pt, pts) {
+    let inside = false;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      const [xi, yi] = pts[i], [xj, yj] = pts[j];
+      if ((yi > pt[1]) !== (yj > pt[1]) && pt[0] < ((xj - xi) * (pt[1] - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+  // A point inside the room outline to anchor its name on, shape-aware so it
+  // respects cut-ins/cut-outs. Prefer the upper-centre (clear of furniture that
+  // usually sits mid-room), falling back to the centroid, bbox centre, then a
+  // corner.
+  function roomLabelAnchor(corners) {
+    const xs = corners.map((p) => p[0]), ys = corners.map((p) => p[1]);
+    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+    const c = polygonCentroid(corners);
+    const cx = Math.min(Math.max(c[0], minX + 1), maxX - 1);
+    const upper = [cx, minY + (maxY - minY) * 0.22];
+    if (pointInPoly(upper, corners)) return upper;
+    if (pointInPoly(c, corners)) return c;
+    const bc = [(minX + maxX) / 2, (minY + maxY) / 2];
+    if (pointInPoly(bc, corners)) return bc;
+    return corners[0];
   }
 
   function drawRoom(room) {
@@ -329,15 +391,16 @@
       })
     );
 
-    // Room name (top-left, inside) — contracted with an ellipsis to fit the
-    // room's on-screen width, and dropped once it's too small to be useful.
-    const roomName = fitLabel(room.name, room.w * view.scale - 16, 15, 5);
+    // Room name — centred on a point that's actually inside the outline (so it
+    // accounts for cut-ins/cut-outs), contracted with an ellipsis only when it
+    // genuinely doesn't fit.
+    const roomName = fitLabel(room.name, room.w * view.scale - 16, 15, 700, 5);
     if (roomName && room.h * view.scale > 26) {
-      const [nx, ny] = geo.corners[0];
-      g.appendChild(textLabel(nx + 8, ny + 20, roomName, { weight: 700, size: 15, fill: "#1f2933" }));
+      const [cx, cy] = roomLabelAnchor(geo.corners);
+      g.appendChild(textLabel(cx, cy + 5, roomName, { weight: 700, size: 15, fill: "#1f2933", anchor: "middle" }));
     }
 
-    drawEdgeLabels(g, geo, room, room.id, null);
+    collectEdgeLabels(geo, room.id, null, sel, room.color);
     if (sel) drawHandles(g, geo);
     svg.appendChild(g);
   }
@@ -369,7 +432,7 @@
 
     // Object name, centred — contracted with an ellipsis to fit the object's
     // width, hidden only once fewer than ~5 real characters would fit.
-    const objName = fitLabel(obj.name, obj.w * view.scale - 8, 13, 5);
+    const objName = fitLabel(obj.name, obj.w * view.scale - 8, 13, 600, 5);
     if (objName && obj.h * view.scale > 18) {
       g.appendChild(
         textLabel(geo.center[0], geo.center[1] + 4, objName, {
@@ -378,7 +441,7 @@
       );
     }
 
-    drawEdgeLabels(g, geo, obj, room.id, obj.id);
+    collectEdgeLabels(geo, room.id, obj.id, sel, room.color);
     if (sel) drawHandles(g, geo);
     svg.appendChild(g);
   }
@@ -399,42 +462,56 @@
     );
   }
 
-  function drawEdgeLabels(g, geo, item, roomId, objId) {
+  // Edge labels are gathered during the item pass, then positioned by
+  // placeEdgeLabels() so overlaps are resolved globally rather than by a blunt
+  // per-edge length threshold (which hid short cut-in edges far too eagerly).
+  let labelCandidates = [];
+  function collectEdgeLabels(geo, roomId, objId, selected, tint) {
     if (!ui.edges) return;
     for (const e of geo.edges) {
       const [lx, ly] = e.labelScreen;
       const txt = `${round(e.len)} cm`;
-      const wpx = txt.length * 6.6 + 8;
-      // Declutter: skip an edge whose on-screen length can't hold its own label
-      // (this is what overlaps/crowds when zoomed out).
-      if (e.len * view.scale < wpx) continue;
-      const eg = svgEl("g", {
-        class: "edge-label",
-        "data-kind": "edge",
-        "data-room": roomId,
-        "data-edge": e.idx,
-        style: "cursor:pointer",
-      });
-      if (objId) eg.setAttribute("data-obj", objId);
-      eg.appendChild(
-        svgEl("rect", {
-          x: lx - wpx / 2, y: ly - 9, width: wpx, height: 18, rx: 4,
-          fill: "#ffffff", "fill-opacity": 0.92, stroke: "#9aa1ab", "stroke-width": 1,
-        })
-      );
-      eg.appendChild(
-        svgEl(
-          "text",
-          {
-            x: lx, y: ly + 4,
-            "font-size": 11, "text-anchor": "middle", fill: "#374151",
-            "font-family": "system-ui, sans-serif", style: "pointer-events:none",
-          },
-          txt
-        )
-      );
-      g.appendChild(eg);
+      const wpx = measureText(txt, 11) + 12;
+      labelCandidates.push({ lx, ly, wpx, txt, roomId, objId, idx: e.idx, len: e.len, selected: selected ? 1 : 0, tint });
     }
+  }
+
+  function placeEdgeLabels(layer) {
+    // Priority: the selected item first, then longer edges. Each label is drawn
+    // unless it would overlap one already placed — so a short edge's dimension
+    // shows as soon as there's room for it, and only real collisions are hidden.
+    labelCandidates.sort((a, b) => b.selected - a.selected || b.len - a.len);
+    const placed = [];
+    const pad = 2;
+    for (const c of labelCandidates) {
+      const x = c.lx - c.wpx / 2, y = c.ly - 9, w = c.wpx, h = 18;
+      let clash = false;
+      for (const r of placed) {
+        if (x < r.x + r.w + pad && x + w + pad > r.x && y < r.y + r.h + pad && y + h + pad > r.y) { clash = true; break; }
+      }
+      if (clash) continue;
+      placed.push({ x, y, w, h });
+      layer.appendChild(buildEdgeLabel(c, x, y, w));
+    }
+  }
+
+  function buildEdgeLabel(c, x, y, w) {
+    const eg = svgEl("g", {
+      class: "edge-label", "data-kind": "edge", "data-room": c.roomId,
+      "data-edge": c.idx, style: "cursor:pointer",
+    });
+    if (c.objId) eg.setAttribute("data-obj", c.objId);
+    eg.appendChild(svgEl("rect", {
+      x, y, width: w, height: 18, rx: 4,
+      // Tinted to the owning room's colour; pastels keep dark text readable.
+      fill: c.tint || "#ffffff", "fill-opacity": 0.95,
+      stroke: "rgba(15,23,42,0.25)", "stroke-width": 1,
+    }));
+    eg.appendChild(svgEl("text", {
+      x: c.lx, y: c.ly + 4, "font-size": 11, "text-anchor": "middle", fill: "#1f2933",
+      "font-family": "system-ui, sans-serif", style: "pointer-events:none",
+    }, c.txt));
+    return eg;
   }
 
   function drawHandles(g, geo) {
@@ -502,15 +579,25 @@
       return;
     }
     const kind = target.getAttribute("data-kind");
+    const roomId = target.getAttribute("data-room");
+    const objId = target.getAttribute("data-obj");
+    const [gmx, gmy] = mousePos(e);
+
+    if (locked) {
+      // View/select only: open the item in the side panel for editing, but
+      // never move it or open the canvas edge editor — a drag pans instead.
+      const sel = objId ? { kind: "object", roomId, objId } : { kind: "room", roomId };
+      const wasSelected = roomId ? sameSel(selection, sel) : false;
+      if (roomId) select(sel);
+      drag = { type: "pan", startOx: view.ox, startOy: view.oy, startMx: gmx, startMy: gmy, lockSel: roomId ? sel : null, wasSelected, moved: false };
+      return;
+    }
 
     if (kind === "edge") {
       openEdgeEditor(target, e);
       return;
     }
 
-    const roomId = target.getAttribute("data-room");
-    const objId = target.getAttribute("data-obj");
-    const [gmx, gmy] = mousePos(e);
     if (kind === "object") {
       const wasSelected = sameSel(selection, { kind: "object", roomId, objId });
       select({ kind: "object", roomId, objId });
@@ -557,6 +644,10 @@
     const [mx, my] = mousePos(e);
 
     if (drag.type === "pan") {
+      // Below the tap threshold, keep it a tap (so a locked tap can select/
+      // deselect without nudging the view).
+      if (!drag.moved && Math.hypot(mx - drag.startMx, my - drag.startMy) < TAP_SLOP) return;
+      drag.moved = true;
       view.ox = drag.startOx + (mx - drag.startMx);
       view.oy = drag.startOy + (my - drag.startMy);
       render();
@@ -590,16 +681,36 @@
     }
     if (pointers.size < 2) pinch = null;
     if (drag) {
-      if (drag.moved) save();
-      // A tap (no drag) on the already-selected item clears the selection —
-      // a reliable way to deselect on touch, where empty canvas is scarce.
-      else if ((drag.type === "object" || drag.type === "room") && drag.wasSelected) select(null);
+      if (drag.type === "pan") {
+        // Panning doesn't mutate content. A locked tap (no pan) on the already-
+        // selected item deselects it.
+        if (!drag.moved && drag.lockSel && drag.wasSelected) select(null);
+      } else if (drag.moved) {
+        save();
+      } else if (drag.wasSelected) {
+        // Tap (no drag) on the already-selected item clears the selection — a
+        // reliable way to deselect on touch, where empty canvas is scarce.
+        select(null);
+      }
     }
     drag = null;
   }
 
   function dist(a, b) {
     return Math.hypot(a[0] - b[0], a[1] - b[1]);
+  }
+
+  function setLocked(v) {
+    locked = v;
+    const b = el("btn-lock");
+    if (b) {
+      b.textContent = locked ? "🔒 Locked" : "🔓 Editing";
+      b.classList.toggle("locked", locked);
+      b.title = locked
+        ? "Canvas locked — drag pans, taps select. Tap to enable editing."
+        : "Editing enabled — drag moves items. Tap to lock the canvas.";
+    }
+    svg.classList.toggle("locked", locked);
   }
 
   // Wheel zoom (desktop)
@@ -1258,6 +1369,7 @@
     selection = null;
     try { localStorage.setItem(STORAGE_KEY, serialize()); } catch (_) {}
     suppressSync = false;
+    resetHistory(); // a remote replacement is a new baseline, not an undo step
     renderLayoutBar();
     render();
     refreshPanel();
@@ -1269,9 +1381,11 @@
 
   let saveTimer = null;
   let suppressSync = false; // true while applying a remote doc, to avoid loops
-  function save() {
+
+  // Write to localStorage + schedule a Drive sync, bumping the skew-proof
+  // revision. Does NOT touch undo history (used by undo/redo replay too).
+  function persist() {
     if (!suppressSync) {
-      // Bump the monotonic revision (skew-proof ordering) and a display time.
       doc.rev = DRIVE.nextRev();
       doc.updatedAt = Date.now();
     }
@@ -1280,9 +1394,65 @@
     } catch (_) {}
     if (!suppressSync) DRIVE.scheduleSync();
   }
+  function save() {
+    persist();
+    if (!suppressSync) recordHistory();
+  }
   function saveSoon() {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(save, 300);
+  }
+
+  // ---- Undo / redo: snapshots of plan content captured at each save ----
+  const HISTORY_LIMIT = 80;
+  let undoStack = [];
+  let redoStack = [];
+  let lastSnap = null;
+  const contentSnap = () => JSON.stringify({ activeId: doc.activeId, layouts: doc.layouts });
+  function recordHistory() {
+    const snap = contentSnap();
+    if (snap === lastSnap) return;
+    if (lastSnap !== null) {
+      undoStack.push(lastSnap);
+      if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
+    }
+    redoStack.length = 0;
+    lastSnap = snap;
+    updateHistoryButtons();
+  }
+  function resetHistory() {
+    undoStack = [];
+    redoStack = [];
+    lastSnap = contentSnap();
+    updateHistoryButtons();
+  }
+  function updateHistoryButtons() {
+    const u = el("btn-undo"), r = el("btn-redo");
+    if (u) u.disabled = !undoStack.length;
+    if (r) r.disabled = !redoStack.length;
+  }
+  function applyHistory(snap) {
+    const data = JSON.parse(snap);
+    doc.activeId = data.activeId;
+    doc.layouts = data.layouts;
+    lastSnap = snap;
+    state = activeLayout();
+    selection = null;
+    persist(); // save + sync, but don't create a new history step
+    renderLayoutBar();
+    render();
+    refreshPanel();
+    updateHistoryButtons();
+  }
+  function undo() {
+    if (!undoStack.length) return;
+    redoStack.push(lastSnap);
+    applyHistory(undoStack.pop());
+  }
+  function redo() {
+    if (!redoStack.length) return;
+    undoStack.push(lastSnap);
+    applyHistory(redoStack.pop());
   }
   function load() {
     try {
@@ -1652,6 +1822,9 @@
   document.addEventListener("keydown", (e) => {
     const typing = e.target.matches("input, select, textarea");
     if (typing) return;
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.key.toLowerCase() === "z" && !e.shiftKey) { e.preventDefault(); undo(); return; }
+    if (mod && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) { e.preventDefault(); redo(); return; }
     const r = resolveSel();
     if ((e.key === "Delete" || e.key === "Backspace") && r) { e.preventDefault(); deleteSel(); }
     else if (e.key.toLowerCase() === "r" && r && r.kind === "object") { rotateSel(); }
@@ -1673,6 +1846,9 @@
   // ---------------------------------------------------------------------------
   // Wire up toolbar
   // ---------------------------------------------------------------------------
+  el("btn-lock").addEventListener("click", () => setLocked(!locked));
+  el("btn-undo").addEventListener("click", undo);
+  el("btn-redo").addEventListener("click", redo);
   el("btn-add-room").addEventListener("click", addRoom);
   el("btn-add-object").addEventListener("click", addObject);
   el("btn-rotate").addEventListener("click", rotateSel);
@@ -1721,6 +1897,10 @@
   // ---------------------------------------------------------------------------
   doc = load() || sample();
   state = activeLayout();
+  resetHistory();
+  // Lock the canvas by default on touch devices, so taps to pan/zoom can't
+  // accidentally move things. Desktop (fine pointer) starts unlocked.
+  setLocked(window.matchMedia("(pointer: coarse)").matches);
   bindPanel();
   renderLayoutBar();
   refreshPanel();
