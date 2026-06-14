@@ -435,13 +435,26 @@
       const dir = S.dir;
       const out = [dir[1], -dir[0]]; // outward from the base wall
       const [bx, by] = S.start(room);
-      // The face runs parallel to the wall, offset by the notch depth.
-      const px = bx + dir[0] * n.pos + out[0] * n.depth;
-      const py = by + dir[1] * n.pos + out[1] * n.depth;
+      const absD = Math.abs(n.depth), sgn = n.depth >= 0 ? 1 : -1;
+      const dirSide = [out[0] * sgn, out[1] * sgn]; // along a side, from base wall outwards
+      const partOps = (part) => (room.openings || []).filter((o) => o.notch === n.id && (o.notchEdge || "face") === part);
+      // Front face: parallel to the wall, offset by the notch depth.
       segs.push({
-        notchId: n.id, side: n.side, dir, sx: px, sy: py, len: n.width, inward: [-dir[1], dir[0]],
-        cutouts: [], ops: (room.openings || []).filter((o) => o.notch === n.id),
+        notchId: n.id, notchEdge: "face", side: n.side, dir,
+        sx: bx + dir[0] * n.pos + out[0] * n.depth, sy: by + dir[1] * n.pos + out[1] * n.depth,
+        len: n.width, inward: [-dir[1], dir[0]], cutouts: [], ops: partOps("face"),
       });
+      if (absD >= 1) {
+        // Two sides, perpendicular to the wall; inward points into the notch.
+        segs.push({
+          notchId: n.id, notchEdge: "side1", side: n.side, dir: dirSide,
+          sx: bx + dir[0] * n.pos, sy: by + dir[1] * n.pos, len: absD, inward: [dir[0], dir[1]], cutouts: [], ops: partOps("side1"),
+        });
+        segs.push({
+          notchId: n.id, notchEdge: "side2", side: n.side, dir: dirSide,
+          sx: bx + dir[0] * (n.pos + n.width), sy: by + dir[1] * (n.pos + n.width), len: absD, inward: [-dir[0], -dir[1]], cutouts: [], ops: partOps("side2"),
+        });
+      }
     }
     return segs;
   }
@@ -1286,15 +1299,21 @@
     };
     for (const s of ["top", "right", "bottom", "left"]) add("wall:" + s, SIDE_LABELS[s]);
     (room.notches || []).forEach((n, idx) => {
-      add("notch:" + n.id, SIDE_LABELS[n.side] + " · " + (n.depth < 0 ? "cut-in" : "cut-out") + " " + (idx + 1) + " face");
+      const base = SIDE_LABELS[n.side] + " · " + (n.depth < 0 ? "cut-in" : "cut-out") + " " + (idx + 1);
+      add("notch:" + n.id + ":face", base + " face");
+      if (Math.abs(n.depth) >= 1) {
+        add("notch:" + n.id + ":side1", base + " side A");
+        add("notch:" + n.id + ":side2", base + " side B");
+      }
     });
-    sel.value = o.notch ? "notch:" + o.notch : "wall:" + o.side;
+    sel.value = o.notch ? "notch:" + o.notch + ":" + (o.notchEdge || "face") : "wall:" + o.side;
     sel.addEventListener("change", (e) => {
       const v = e.target.value;
       if (v.startsWith("notch:")) {
-        const id = v.slice(6);
+        const [id, part] = v.slice(6).split(":");
         const n = (room.notches || []).find((x) => x.id === id);
         o.notch = id;
+        o.notchEdge = part || "face";
         if (n) o.side = n.side;
       } else {
         o.notch = null;
@@ -1728,8 +1747,10 @@
           id: o.id || uid("op"),
           type: o.type === "window" ? "window" : "door",
           side: o.side,
-          // Optional: id of the cut-out/cut-in whose face this opening sits on.
+          // Optional: id of the cut-out/cut-in this opening sits on, and which
+          // edge of it (front face or one of the two sides).
           notch: o.notch ? String(o.notch) : null,
+          notchEdge: ["side1", "side2"].includes(o.notchEdge) ? o.notchEdge : "face",
           hinge: o.hinge === "end" ? "end" : "start",
           swing: o.swing === "in" ? "in" : "out",
           gap: Math.max(0, Math.round(+o.gap || 0)),
