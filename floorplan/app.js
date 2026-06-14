@@ -2280,29 +2280,23 @@
     // authorised-origins allowlist are what protect it. Forks can override it via
     // the in-app field, which is stored in localStorage and takes precedence.
     const DEFAULT_CLIENT_ID = "570993263806-e6ga4lb5137114grenq6ucjtmq159o4q.apps.googleusercontent.com";
-    // Baked-in default Google API key, used only by the Picker (for opening a
-    // shared plan). Like the Client ID it is not a secret, but you should
-    // restrict it (Picker API + your site's HTTP referrers) in the Cloud Console.
-    // Leave "" to fall back to the per-device key the user is prompted for.
-    const DEFAULT_API_KEY = "AIzaSyCz_xdMDpKvj1Q97ICObW4OF0Dcm4MvNPI";
+    // No Google API / developer key: the Picker authenticates with the OAuth
+    // token alone (sufficient for a drive.file picker), so the app needs no API
+    // key at all. Earlier builds baked one in and let users enter their own,
+    // stored under "floorplan.drive.apiKey"; that key is gone now, so we just
+    // purge any leftover stored value below.
     const LS = {
       clientId: "floorplan.drive.clientId",
       fileId: "floorplan.drive.fileId",
       connected: "floorplan.drive.connected",
       auto: "floorplan.drive.auto",
       lastRev: "floorplan.drive.lastRev",
-      apiKey: "floorplan.drive.apiKey",
       sharedFile: "floorplan.drive.sharedFile",
     };
 
     let clientId = localStorage.getItem(LS.clientId) || DEFAULT_CLIENT_ID;
-    // The Picker API key is baked in and managed behind the scenes. Older builds
-    // let the user enter their own key, stored under LS.apiKey; that stored value
-    // would override the baked-in key and, if stale/invalid, make the Picker fail
-    // with "The API developer key is invalid". So always use DEFAULT_API_KEY and
-    // purge any leftover stored key.
-    try { localStorage.removeItem(LS.apiKey); } catch (_) {}
-    let apiKey = DEFAULT_API_KEY;
+    // Clean up the now-unused API key some browsers still have stored.
+    try { localStorage.removeItem("floorplan.drive.apiKey"); } catch (_) {}
 
     // Stable per-device id + editable label, written into the file so every
     // client can show who last wrote and when.
