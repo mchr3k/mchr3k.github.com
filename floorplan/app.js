@@ -334,45 +334,121 @@
     return null;
   }
 
-  // Area centroid of a polygon (screen coords); falls back to the vertex
-  // average for degenerate cases.
-  function polygonCentroid(pts) {
-    let a = 0, cx = 0, cy = 0;
-    for (let i = 0; i < pts.length; i++) {
-      const [x0, y0] = pts[i], [x1, y1] = pts[(i + 1) % pts.length];
-      const cross = x0 * y1 - x1 * y0;
-      a += cross; cx += (x0 + x1) * cross; cy += (y0 + y1) * cross;
+  // The leftmost interior horizontal span [x0,x1] of the outline at screen-y `y`
+  // (so the label respects a cut-in eating into that row), or null if the line
+  // misses the polygon.
+  function leftInteriorSpanAt(corners, y) {
+    const xs = [];
+    for (let i = 0; i < corners.length; i++) {
+      const a = corners[i], b = corners[(i + 1) % corners.length];
+      if ((a[1] <= y && b[1] > y) || (b[1] <= y && a[1] > y)) {
+        xs.push(a[0] + ((y - a[1]) / (b[1] - a[1])) * (b[0] - a[0]));
+      }
     }
-    a *= 0.5;
-    if (Math.abs(a) < 1e-6) {
-      const n = pts.length;
-      return [pts.reduce((s, p) => s + p[0], 0) / n, pts.reduce((s, p) => s + p[1], 0) / n];
-    }
-    return [cx / (6 * a), cy / (6 * a)];
+    if (xs.length < 2) return null;
+    xs.sort((p, q) => p - q);
+    return [xs[0], xs[1]];
   }
-  function pointInPoly(pt, pts) {
-    let inside = false;
-    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-      const [xi, yi] = pts[i], [xj, yj] = pts[j];
-      if ((yi > pt[1]) !== (yj > pt[1]) && pt[0] < ((xj - xi) * (pt[1] - yi)) / (yj - yi) + xi) inside = !inside;
+
+  // Place the room name tightly in the top-left. Drops to a lower band when a
+  // cut-out (or the zoom level) leaves too little room up there, and uses minimal
+  // padding so the full name survives as long as possible before truncating.
+  function roomLabelPlacement(corners, name) {
+    const ys = corners.map((p) => p[1]);
+    const minY = Math.min(...ys), maxY = Math.max(...ys), hPx = maxY - minY;
+    if (hPx < 22) return null;
+    const pad = 5;
+    for (const f of [0.16, 0.4, 0.62]) {
+      const y = minY + hPx * f;
+      const span = leftInteriorSpanAt(corners, y);
+      if (!span || span[1] - span[0] < 18) continue;
+      const text = fitLabel(name, span[1] - span[0] - pad * 2, 15, 700, 5);
+      if (text) return { x: span[0] + pad, y: y + 16, text };
     }
-    return inside;
+    return null;
   }
-  // A point inside the room outline to anchor its name on, shape-aware so it
-  // respects cut-ins/cut-outs. Prefer the upper-centre (clear of furniture that
-  // usually sits mid-room), falling back to the centroid, bbox centre, then a
-  // corner.
-  function roomLabelAnchor(corners) {
-    const xs = corners.map((p) => p[0]), ys = corners.map((p) => p[1]);
-    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
-    const c = polygonCentroid(corners);
-    const cx = Math.min(Math.max(c[0], minX + 1), maxX - 1);
-    const upper = [cx, minY + (maxY - minY) * 0.22];
-    if (pointInPoly(upper, corners)) return upper;
-    if (pointInPoly(c, corners)) return c;
-    const bc = [(minX + maxX) / 2, (minY + maxY) / 2];
-    if (pointInPoly(bc, corners)) return bc;
-    return corners[0];
+
+  // Resolve where each opening sits along a wall (cm from the wall's start
+  // corner). Each opening starts `gap` cm after the previous feature; if its
+  // gap/body would run into a cut-out, it re-anchors so the gap is measured
+  // from that cut-out's far edge (the "whichever is closest" rule).
+  function layoutWallOpenings(wallLen, cutouts, openings) {
+    const cuts = cutouts.slice().sort((a, b) => a[0] - b[0]);
+    let cursor = 0;
+    const out = [];
+    for (const op of openings) {
+      let start = cursor + op.gap;
+      for (let i = 0; i <= cuts.length; i++) {
+        const c = cuts.find(([s, e]) => e > cursor + 0.001 && s < start + op.width);
+        if (!c) break;
+        cursor = c[1];
+        start = cursor + op.gap;
+      }
+      const end = start + op.width;
+      out.push({ id: op.id, type: op.type, start, end, fits: end <= wallLen + 0.5 });
+      cursor = end;
+    }
+    return out;
+  }
+
+  function drawOpenings(g, room) {
+    const openings = room.openings || [];
+    if (!openings.length) return;
+    for (const side of ["top", "right", "bottom", "left"]) {
+      const ops = openings.filter((o) => o.side === side);
+      if (!ops.length) continue;
+      const S = SIDES[side];
+      const wallLen = S.len(room);
+      const cutouts = (room.notches || []).filter((n) => n.side === side).map((n) => [n.pos, n.pos + n.width]);
+      const [sx, sy] = S.start(room);
+      const dir = S.dir;
+      const inward = [-dir[1], dir[0]]; // unit vector pointing into the room
+      for (const p of layoutWallOpenings(wallLen, cutouts, ops)) {
+        const a = clamp(p.start, 0, wallLen), b = clamp(p.end, 0, wallLen);
+        if (b - a < 0.5) continue;
+        const p1 = worldToScreen(room.x + sx + dir[0] * a, room.y + sy + dir[1] * a);
+        const p2 = worldToScreen(room.x + sx + dir[0] * b, room.y + sy + dir[1] * b);
+        (p.type === "door" ? drawDoor : drawWindow)(g, p1, p2, inward, room.id, p.id);
+      }
+    }
+  }
+
+  function maskWall(g, p1, p2) {
+    // Open the wall under an opening with a clean white gap.
+    g.appendChild(svgEl("line", {
+      x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1],
+      stroke: "#ffffff", "stroke-width": 5, "stroke-linecap": "butt",
+    }));
+  }
+
+  function drawDoor(g, p1, p2, inward, roomId, opId) {
+    const r = dist(p1, p2);
+    const eg = svgEl("g", { class: "opening door", "data-room": roomId, "data-opening": opId, style: "pointer-events:none" });
+    maskWall(eg, p1, p2);
+    // Hinge at p1; leaf swings 90° into the room; arc back to the far jamb p2.
+    const tip = [p1[0] + inward[0] * r, p1[1] + inward[1] * r];
+    const sweep = (p2[0] - p1[0]) * inward[1] - (p2[1] - p1[1]) * inward[0] > 0 ? 1 : 0;
+    eg.appendChild(svgEl("path", {
+      d: `M ${tip[0].toFixed(1)} ${tip[1].toFixed(1)} A ${r.toFixed(1)} ${r.toFixed(1)} 0 0 ${sweep} ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`,
+      fill: "none", stroke: "#64748b", "stroke-width": 1, "stroke-dasharray": "3 3",
+    }));
+    eg.appendChild(svgEl("line", { x1: p1[0], y1: p1[1], x2: tip[0], y2: tip[1], stroke: "#475569", "stroke-width": 2 }));
+    g.appendChild(eg);
+  }
+
+  function drawWindow(g, p1, p2, inward, roomId, opId) {
+    const eg = svgEl("g", { class: "opening window", "data-room": roomId, "data-opening": opId, style: "pointer-events:none" });
+    maskWall(eg, p1, p2);
+    const o = 2.2; // half the frame thickness in px
+    for (const s of [o, -o]) {
+      eg.appendChild(svgEl("line", {
+        x1: p1[0] + inward[0] * s, y1: p1[1] + inward[1] * s,
+        x2: p2[0] + inward[0] * s, y2: p2[1] + inward[1] * s,
+        stroke: "#2563eb", "stroke-width": 1.4,
+      }));
+    }
+    eg.appendChild(svgEl("line", { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1], stroke: "#93c5fd", "stroke-width": 1 }));
+    g.appendChild(eg);
   }
 
   function drawRoom(room) {
@@ -391,15 +467,13 @@
       })
     );
 
-    // Room name — centred on a point that's actually inside the outline (so it
-    // accounts for cut-ins/cut-outs), contracted with an ellipsis only when it
-    // genuinely doesn't fit.
-    const roomName = fitLabel(room.name, room.w * view.scale - 16, 15, 700, 5);
-    if (roomName && room.h * view.scale > 26) {
-      const [cx, cy] = roomLabelAnchor(geo.corners);
-      g.appendChild(textLabel(cx, cy + 5, roomName, { weight: 700, size: 15, fill: "#1f2933", anchor: "middle" }));
+    // Room name — tucked into the top-left interior, cut-out/zoom aware.
+    const place = roomLabelPlacement(geo.corners, room.name);
+    if (place) {
+      g.appendChild(textLabel(place.x, place.y, place.text, { weight: 700, size: 15, fill: "#1f2933" }));
     }
 
+    drawOpenings(g, room);
     collectEdgeLabels(geo, room.id, null, sel, room.color);
     if (sel) drawHandles(g, geo);
     svg.appendChild(g);
@@ -839,6 +913,10 @@
     walls.hidden = r.kind !== "room";
     if (r.kind === "room") renderWalls(r.room);
 
+    const openings = el("room-openings");
+    openings.hidden = r.kind !== "room";
+    if (r.kind === "room") renderOpenings(r.room);
+
     const contents = el("room-contents");
     contents.hidden = r.kind !== "room";
     if (r.kind === "room") renderContents(r.room);
@@ -976,6 +1054,114 @@
     };
     if (!parent) notch.side = "top";
     (parent ? parent.children : r.room.notches).push(notch);
+    save();
+    render();
+    refreshPanel();
+  }
+
+  // ---- Doors & windows ----
+  function renderOpenings(room) {
+    const list = el("openings-list");
+    list.replaceChildren();
+    const ops = room.openings || [];
+    if (!ops.length) {
+      const li = document.createElement("li");
+      li.style.cssText = "color:var(--muted);font-size:13px;list-style:none";
+      li.textContent = "No doors or windows yet.";
+      list.appendChild(li);
+      return;
+    }
+    ops.forEach((o, i) => list.appendChild(openingItem(room, o, i)));
+  }
+
+  function mkBtn(txt, title, fn) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = txt;
+    if (title) b.title = title;
+    b.addEventListener("click", fn);
+    return b;
+  }
+
+  function openingItem(room, o, i) {
+    const li = document.createElement("li");
+    li.className = "wall-item";
+    const head = document.createElement("div");
+    head.className = "wall-item-head";
+    const kindEl = document.createElement("span");
+    kindEl.className = "kind";
+    kindEl.textContent = (o.type === "window" ? "Window" : "Door") + ` · ${SIDE_LABELS[o.side]}`;
+    const tools = document.createElement("div");
+    tools.className = "wall-buttons nested";
+    tools.append(
+      mkBtn("↑", "Move earlier along the wall", () => moveOpening(room, i, -1)),
+      mkBtn("↓", "Move later along the wall", () => moveOpening(room, i, 1)),
+      mkBtn("Remove", "", () => { room.openings.splice(i, 1); save(); render(); refreshPanel(); })
+    );
+    head.append(kindEl, tools);
+
+    const grid = document.createElement("div");
+    grid.className = "wall-grid";
+    grid.append(
+      openingField(o, "type", "Type", "type"),
+      openingField(o, "side", "Wall", "select"),
+      openingField(o, "gap", "Gap (cm)", "number"),
+      openingField(o, "width", "Width (cm)", "number")
+    );
+    li.append(head, grid);
+    return li;
+  }
+
+  function moveOpening(room, i, dir) {
+    const a = room.openings, j = i + dir;
+    if (j < 0 || j >= a.length) return;
+    [a[i], a[j]] = [a[j], a[i]];
+    save();
+    render();
+    refreshPanel();
+  }
+
+  function openingField(o, key, label, type) {
+    const wrapEl = document.createElement("label");
+    const span = document.createElement("span");
+    span.textContent = label;
+    let input;
+    if (type === "select" || type === "type") {
+      input = document.createElement("select");
+      const opts = type === "type" ? ["door", "window"] : ["top", "right", "bottom", "left"];
+      for (const s of opts) {
+        const opt = document.createElement("option");
+        opt.value = s;
+        opt.textContent = type === "type" ? s[0].toUpperCase() + s.slice(1) : SIDE_LABELS[s];
+        if (o[key] === s) opt.selected = true;
+        input.appendChild(opt);
+      }
+      input.addEventListener("change", (e) => { o[key] = e.target.value; save(); render(); refreshPanel(); });
+    } else {
+      input = document.createElement("input");
+      input.type = "number";
+      input.min = key === "gap" ? "0" : "1";
+      input.step = "1";
+      input.value = round(o[key]);
+      input.addEventListener("input", (e) => {
+        const v = parseFloat(e.target.value);
+        if (isNaN(v)) return;
+        o[key] = Math.max(key === "gap" ? 0 : 1, round(v));
+        render();
+        saveSoon();
+      });
+    }
+    wrapEl.append(span, input);
+    return wrapEl;
+  }
+
+  function addOpening(type) {
+    const r = resolveSel();
+    if (!r || r.kind !== "room") return;
+    const room = r.room;
+    if (!room.openings) room.openings = [];
+    const lastSide = room.openings.length ? room.openings[room.openings.length - 1].side : "top";
+    room.openings.push({ id: uid("op"), type, side: lastSide, gap: 50, width: type === "door" ? 80 : 120 });
     save();
     render();
     refreshPanel();
@@ -1121,6 +1307,7 @@
         x: r.room.x + 30,
         y: r.room.y + 30,
         notches: (r.room.notches || []).map(cloneNotch),
+        openings: (r.room.openings || []).map((o) => ({ ...o, id: uid("op") })),
         objects: r.room.objects.map((o) => ({ ...o, id: uid("o") })),
       };
       state.rooms.push(clone);
@@ -1176,6 +1363,7 @@
         ...r,
         id: uid("r"),
         notches: (r.notches || []).map(cloneNotch),
+        openings: (r.openings || []).map((o) => ({ ...o, id: uid("op") })),
         objects: r.objects.map((o) => ({ ...o, id: uid("o") })),
       })),
     };
@@ -1329,6 +1517,15 @@
       notches: (r.notches || [])
         .filter((n) => ["top", "right", "bottom", "left"].includes(n.side))
         .map((n) => normalizeNotch(n, true)),
+      openings: (r.openings || [])
+        .filter((o) => ["top", "right", "bottom", "left"].includes(o.side))
+        .map((o) => ({
+          id: o.id || uid("op"),
+          type: o.type === "window" ? "window" : "door",
+          side: o.side,
+          gap: Math.max(0, Math.round(+o.gap || 0)),
+          width: Math.max(1, Math.round(+o.width || 80)),
+        })),
       objects: (r.objects || []).map((o) => ({
         id: o.id || uid("o"),
         name: o.name || "Object",
@@ -1879,6 +2076,8 @@
   // Wall features
   el("btn-add-inset").addEventListener("click", () => addNotch("inset"));
   el("btn-add-outset").addEventListener("click", () => addNotch("outset"));
+  el("btn-add-door").addEventListener("click", () => addOpening("door"));
+  el("btn-add-window").addEventListener("click", () => addOpening("window"));
 
   // Layout controls
   el("layout-select").addEventListener("change", (e) => setActiveLayout(e.target.value));
@@ -1888,6 +2087,17 @@
   el("btn-layout-delete").addEventListener("click", deleteLayout);
 
   window.addEventListener("resize", render);
+  // Re-render whenever the canvas area itself resizes — e.g. the bottom panel
+  // collapsing on mobile grows the canvas, and the grid must fill the new space
+  // (previously it stayed blank until the next pan/zoom).
+  if (window.ResizeObserver) {
+    let rafPending = false;
+    new ResizeObserver(() => {
+      if (rafPending) return;
+      rafPending = true;
+      requestAnimationFrame(() => { rafPending = false; render(); });
+    }).observe(wrap);
+  }
   // Flush any debounced save if the tab is being hidden or closed.
   window.addEventListener("beforeunload", save);
   document.addEventListener("visibilitychange", () => { if (document.hidden) save(); });
