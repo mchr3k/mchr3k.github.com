@@ -178,7 +178,11 @@
         <div class="welcome-choices">
           <button id="welcome-drive" class="welcome-choice">
             <strong>☁ Use Google Drive</strong>
-            <span class="muted small">Sync across your devices. Uses the least-privilege <code>drive.file</code> scope — the app only ever touches its own plan file.</span>
+            <span class="muted small">Sync your own plan across your devices. Uses the least-privilege <code>drive.file</code> scope — the app only ever touches its own plan file.</span>
+          </button>
+          <button id="welcome-shared" class="welcome-choice">
+            <strong>👥 Open a shared plan</strong>
+            <span class="muted small">Collaborate on a plan someone shared with you in Google Drive (newest change wins).</span>
           </button>
           <button id="welcome-local" class="welcome-choice">
             <strong>▢ Work on this device</strong>
@@ -230,6 +234,13 @@
           Use <strong>Force</strong> to resolve a mismatch by hand: push this device's plan up, or pull
           Drive's copy down, regardless of which looks newer.
         </p>
+
+        <label class="field drive-name-field">
+          <span>This device's name (shown to collaborators)</span>
+          <input type="text" id="drive-clientname" maxlength="40" placeholder="e.g. Martin's laptop" />
+        </label>
+        <div id="drive-writers" class="drive-writers" hidden></div>
+
         <p id="drive-status" class="drive-status"></p>
         <p class="muted small"><a href="privacy.html" target="_blank" rel="noopener">Privacy policy</a></p>
       </div>

@@ -474,6 +474,26 @@ kbd {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
+.drive-sep { margin: 14px 0 10px; }
+.drive-name-field { margin: 12px 0 6px; }
+.drive-writers {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  background: #f6f7f9;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.drive-writers h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.drive-writers .writer-row {
+  font-size: 13px;
+  padding: 2px 0;
+}
 .drive-row button {
   flex: 1;
   min-width: 120px;
