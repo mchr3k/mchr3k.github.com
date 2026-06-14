@@ -2896,7 +2896,10 @@
               .addView(mine)
               .addView(shared)
               .setCallback(pickerCallback);
-            if (apiKey) builder.setDeveloperKey(apiKey);
+            // No setDeveloperKey: for an OAuth-token drive.file picker the API key
+            // is optional, and a key whose project restrictions Google dislikes is
+            // exactly what triggers "The API developer key is invalid". The OAuth
+            // token + appId are sufficient to open files the user picks.
             builder.build().setVisible(true);
           });
         })
