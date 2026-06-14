@@ -1773,9 +1773,15 @@
       connected: "floorplan.drive.connected",
       auto: "floorplan.drive.auto",
       lastRev: "floorplan.drive.lastRev",
+      apiKey: "floorplan.drive.apiKey",
+      sharedFile: "floorplan.drive.sharedFile",
     };
 
     let clientId = localStorage.getItem(LS.clientId) || DEFAULT_CLIENT_ID;
+    let apiKey = localStorage.getItem(LS.apiKey) || "";
+    // When set, we sync against this specific (typically link-shared) file the
+    // user picked with the Google Picker, instead of their own floorplan.json.
+    let sharedFileId = localStorage.getItem(LS.sharedFile) || "";
     let fileId = localStorage.getItem(LS.fileId) || "";
     let connected = localStorage.getItem(LS.connected) === "1";
     let auto = localStorage.getItem(LS.auto) !== "0";
@@ -1815,6 +1821,10 @@
       el("drive-disconnect").hidden = !connected;
       el("drive-syncnow").hidden = !connected;
       el("drive-force-row").hidden = !connected;
+      const pick = el("drive-pick");
+      if (pick) pick.hidden = !connected;
+      const sharedRow = el("drive-shared-row");
+      if (sharedRow) sharedRow.hidden = !sharedFileId;
       pill();
     }
 
@@ -1913,6 +1923,10 @@
       setStatus("Syncing…");
       try {
         await getToken(interactive);
+
+        // Pinned to a shared file -> sync only against that one file.
+        if (sharedFileId) { await syncSharedFile(mode); return; }
+
         const files = await listFiles();
 
         // No file yet -> create one from the local plan.
@@ -1992,6 +2006,52 @@
       }
     }
 
+    // Sync against a single shared file (picked via the Google Picker), so
+    // multiple people with edit access to one Drive file collaborate on it.
+    // Same newest-wins (by rev) rules as the personal-file path.
+    async function syncSharedFile(mode) {
+      let remote = null;
+      try {
+        remote = JSON.parse(await downloadFile(sharedFileId));
+      } catch (e) {
+        if (/Drive API 404|Drive API 403/.test(e.message)) {
+          setStatus("Lost access to the shared plan. Pick it again.", "err");
+          sharedFileId = ""; lsSet(LS.sharedFile, "");
+          updateUI();
+          return;
+        }
+        throw e;
+      }
+      const localRev = +doc.rev || 0;
+      const remoteRev = remote ? +remote.rev || 0 : 0;
+      const pull = async (label) => {
+        applyRemoteDoc(normalize(remote));
+        setLastSeenRev(remoteRev);
+        setStatus(label + " · " + timeNow());
+      };
+      const push = async (label) => {
+        await updateFile(sharedFileId, serialize());
+        setLastSeenRev(+doc.rev || 0);
+        setStatus(label + " · " + timeNow());
+      };
+      if (mode === "forceDown") {
+        if (remote) await pull("Loaded shared plan");
+        else setStatus("Shared file is empty.");
+      } else if (mode === "forceUp") {
+        doc.rev = Math.max(localRev, remoteRev) + 1;
+        try { localStorage.setItem(STORAGE_KEY, serialize()); } catch (_) {}
+        await push("Uploaded to shared plan");
+      } else if (remote && remoteRev > localRev) {
+        await pull("Updated from shared plan");
+      } else if (localRev > remoteRev) {
+        await push("Saved to shared plan");
+      } else {
+        setLastSeenRev(remoteRev);
+        setStatus("Shared plan up to date · " + timeNow());
+      }
+      pill();
+    }
+
     function timeNow() {
       return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     }
@@ -2043,6 +2103,70 @@
       setStatus("Disconnected.");
     }
 
+    // ---- Shared file via the Google Picker ----
+    // With the drive.file scope, the app can only touch files it created or that
+    // the user explicitly opens with the Picker. So to collaborate on one shared
+    // file, each person picks it here (they must already have edit access via the
+    // Drive share link), which grants this app access to that single file.
+    function pickerReady() {
+      return !!(window.google && google.picker);
+    }
+    function loadPicker(cb) {
+      if (pickerReady()) return cb(true);
+      if (!window.gapi) return cb(false);
+      try { gapi.load("picker", { callback: () => cb(pickerReady()) }); } catch (_) { cb(false); }
+    }
+    function openPicker() {
+      sessionMode = "drive";
+      if (!clientId) { setStatus("No OAuth Client ID configured.", "err"); return; }
+      if (!connected) { setStatus("Connect Google Drive first.", "err"); return; }
+      getToken(true)
+        .then((t) => {
+          loadPicker((ok) => {
+            if (!ok) { setStatus("Couldn't load the Google Picker (offline?).", "err"); return; }
+            if (!apiKey) {
+              const k = prompt(
+                "Google Picker needs an API key from the same Google Cloud project.\n" +
+                  "Create one under APIs & Services → Credentials, then paste it here:"
+              );
+              if (k) { apiKey = k.trim(); lsSet(LS.apiKey, apiKey); }
+            }
+            const appId = clientId.split("-")[0];
+            const mine = new google.picker.DocsView(google.picker.ViewId.DOCS)
+              .setMimeTypes("application/json").setOwnedByMe(true);
+            const shared = new google.picker.DocsView(google.picker.ViewId.DOCS)
+              .setMimeTypes("application/json").setOwnedByMe(false);
+            const builder = new google.picker.PickerBuilder()
+              .setOAuthToken(t)
+              .setAppId(appId)
+              .setTitle("Open a shared floor plan")
+              .addView(mine)
+              .addView(shared)
+              .setCallback(pickerCallback);
+            if (apiKey) builder.setDeveloperKey(apiKey);
+            builder.build().setVisible(true);
+          });
+        })
+        .catch((e) => setStatus("Picker error: " + e.message, "err"));
+    }
+    function pickerCallback(data) {
+      const P = window.google && google.picker;
+      if (!P || !data || data.action !== P.Action.PICKED) return;
+      const f = data.docs && data.docs[0];
+      if (!f) return;
+      sharedFileId = f.id;
+      lsSet(LS.sharedFile, sharedFileId);
+      connected = true; lsSet(LS.connected, "1");
+      updateUI();
+      syncNow(false, "forceDown"); // load the shared plan
+    }
+    function leaveShared() {
+      sharedFileId = "";
+      lsSet(LS.sharedFile, "");
+      updateUI();
+      setStatus("Back to your own plan. Sync to load it.");
+    }
+
     function open() {
       updateUI();
       if (!el("drive-status").textContent) {
@@ -2059,6 +2183,8 @@
       el("drive-connect").addEventListener("click", connect);
       el("drive-disconnect").addEventListener("click", disconnect);
       el("drive-syncnow").addEventListener("click", () => syncNow(true, "auto"));
+      el("drive-pick").addEventListener("click", openPicker);
+      el("drive-leave-shared").addEventListener("click", leaveShared);
       el("drive-force-up").addEventListener("click", () => {
         if (confirm("Overwrite the copy in Google Drive with THIS device's plan?")) syncNow(true, "forceUp");
       });

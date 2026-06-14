@@ -212,6 +212,19 @@
           <button id="drive-force-down" title="Overwrite THIS device with the Drive copy">↓ Force Drive → this device</button>
         </div>
 
+        <hr class="drive-sep" />
+        <p class="muted small">
+          <strong>Collaborate on a shared plan.</strong> Have the owner share a <code>floorplan.json</code> in
+          Drive (e.g. <em>Anyone with the link → Editor</em>), then open it here. Edits are newest-wins, not
+          live co-editing.
+        </p>
+        <div class="drive-row">
+          <button id="drive-pick" hidden title="Pick a Drive file you have edit access to">📂 Open a shared plan…</button>
+        </div>
+        <div class="drive-row" id="drive-shared-row" hidden>
+          <button id="drive-leave-shared" title="Stop editing the shared file and go back to your own plan">Leave shared plan</button>
+        </div>
+
         <label class="check"><input type="checkbox" id="drive-auto" checked /> Auto-sync changes</label>
         <p class="muted small">
           Use <strong>Force</strong> to resolve a mismatch by hand: push this device's plan up, or pull
@@ -225,6 +238,8 @@
 
     <!-- Google Identity Services (for Drive OAuth). Loads only when online. -->
     <script src="https://accounts.google.com/gsi/client" async></script>
+    <!-- Google API client, used to load the Picker for opening shared plans. -->
+    <script src="https://apis.google.com/js/api.js" async></script>
     <script src="app.js"></script>
   </body>
 </html>
