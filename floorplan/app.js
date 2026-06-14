@@ -314,12 +314,24 @@
     return corners.map((c) => `${c[0].toFixed(1)},${c[1].toFixed(1)}`).join(" ");
   }
 
-  // Measure real rendered text width (cached 2D context), so labels contract
-  // only when they genuinely don't fit — not on a conservative guess.
-  const _measureCtx = document.createElement("canvas").getContext("2d");
+  // Measure text with the same SVG engine that renders it. (A canvas
+  // measureText disagrees with SVG text metrics on some platforms — notably
+  // iOS — which made labels overflow/misalign.)
+  const _measText = document.createElementNS(SVGNS, "text");
+  _measText.setAttribute("font-family", "system-ui, sans-serif");
+  (function () {
+    const s = document.createElementNS(SVGNS, "svg");
+    s.setAttribute("aria-hidden", "true");
+    s.style.cssText = "position:absolute;width:0;height:0;overflow:hidden;visibility:hidden";
+    s.appendChild(_measText);
+    (document.body || document.documentElement).appendChild(s);
+  })();
   function measureText(str, size, weight) {
-    _measureCtx.font = `${weight || 400} ${size}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
-    return _measureCtx.measureText(str).width;
+    _measText.setAttribute("font-size", size);
+    _measText.setAttribute("font-weight", weight || 400);
+    _measText.textContent = str;
+    const w = _measText.getComputedTextLength();
+    return w || str.length * size * 0.55; // fallback if metrics unavailable
   }
 
   // Fit a name into `availPx`: the full name if it measures within, otherwise
@@ -353,17 +365,22 @@
   // Place the room name tightly in the top-left. Drops to a lower band when a
   // cut-out (or the zoom level) leaves too little room up there, and uses minimal
   // padding so the full name survives as long as possible before truncating.
+  // Place the room name tightly just inside the top-left, a fixed distance below
+  // the top wall so it sits in the corner regardless of room size. Drops to a
+  // lower band when a cut-out (or the zoom level) leaves too little room there,
+  // and contracts down to two characters before giving up.
   function roomLabelPlacement(corners, name) {
     const ys = corners.map((p) => p[1]);
-    const minY = Math.min(...ys), maxY = Math.max(...ys), hPx = maxY - minY;
-    if (hPx < 22) return null;
-    const pad = 5;
-    for (const f of [0.16, 0.4, 0.62]) {
-      const y = minY + hPx * f;
-      const span = leftInteriorSpanAt(corners, y);
-      if (!span || span[1] - span[0] < 18) continue;
-      const text = fitLabel(name, span[1] - span[0] - pad * 2, 15, 700, 5);
-      if (text) return { x: span[0] + pad, y: y + 16, text };
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    if (maxY - minY < 24) return null;
+    const pad = 6;
+    for (const dy of [21, 43, 65]) {
+      const y = minY + dy;
+      if (y > maxY - 4) break;
+      const span = leftInteriorSpanAt(corners, y - 5);
+      if (!span || span[1] - span[0] < 14) continue;
+      const text = fitLabel(name, span[1] - span[0] - pad * 2, 15, 700, 2);
+      if (text) return { x: span[0] + pad, y, text };
     }
     return null;
   }
@@ -526,7 +543,7 @@
 
     // Object name, centred — contracted with an ellipsis to fit the object's
     // width, hidden only once fewer than ~5 real characters would fit.
-    const objName = fitLabel(obj.name, obj.w * view.scale - 8, 13, 600, 5);
+    const objName = fitLabel(obj.name, obj.w * view.scale - 8, 13, 600, 2);
     if (objName && obj.h * view.scale > 18) {
       g.appendChild(
         textLabel(geo.center[0], geo.center[1] + 4, objName, {
