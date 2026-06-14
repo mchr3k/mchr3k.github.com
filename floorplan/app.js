@@ -1798,7 +1798,28 @@
       return id;
     })();
     let clientName = localStorage.getItem("floorplan.clientName") || "";
-    const clientLabel = () => clientName || "Device " + CLIENT_ID.slice(-4);
+    // Best-effort device description from the browser. The browser/OS are
+    // detectable; specific hardware (e.g. "MacBook Air M1", "iPhone 13 mini")
+    // is not exposed for privacy, so users can override via the name field.
+    function deviceDescription() {
+      const ua = navigator.userAgent || "";
+      let browser = "Browser";
+      if (/\bEdg\//.test(ua)) browser = "Edge";
+      else if (/\bOPR\/|Opera/.test(ua)) browser = "Opera";
+      else if (/Firefox\//.test(ua)) browser = "Firefox";
+      else if (/Chrome\//.test(ua)) browser = "Chrome";
+      else if (/Safari\//.test(ua)) browser = "Safari";
+      let os = "";
+      if (/iPhone/.test(ua)) os = "iPhone";
+      else if (/iPad/.test(ua)) os = "iPad";
+      else if (/Android/.test(ua)) os = "Android";
+      else if (/Mac OS X|Macintosh/.test(ua)) os = "macOS";
+      else if (/Windows/.test(ua)) os = "Windows";
+      else if (/CrOS/.test(ua)) os = "ChromeOS";
+      else if (/Linux/.test(ua)) os = "Linux";
+      return os ? browser + " on " + os : browser;
+    }
+    const clientLabel = () => clientName || deviceDescription();
     function stampWriter() {
       if (!doc.writers || typeof doc.writers !== "object") doc.writers = {};
       doc.writers[CLIENT_ID] = { name: clientLabel(), at: Date.now(), rev: +doc.rev || 0 };
@@ -1862,7 +1883,10 @@
       const sharedRow = el("drive-shared-row");
       if (sharedRow) sharedRow.hidden = !sharedFileId;
       const nameInput = el("drive-clientname");
-      if (nameInput && document.activeElement !== nameInput) nameInput.value = clientName;
+      if (nameInput) {
+        nameInput.placeholder = deviceDescription(); // shown when left blank
+        if (document.activeElement !== nameInput) nameInput.value = clientName;
+      }
       renderWriters();
       pill();
     }
@@ -2160,19 +2184,66 @@
       updateUI();
     }
 
-    // On connecting to a target (personal Drive or a shared file), make the
-    // direction explicit: upload this device's plan, or load the target and
-    // discard local changes.
-    // On connecting to a target (personal Drive or a shared file), make the
-    // direction explicit with a modal: upload this device's plan, or load the
-    // target and discard local changes.
+    // Read the current winning remote doc for the active target (a pinned shared
+    // file, or the canonical personal file), or null if there isn't one.
+    async function fetchRemoteDoc() {
+      if (sharedFileId) {
+        try { return JSON.parse(await downloadFile(sharedFileId)); }
+        catch (e) { if (/Drive API 40[34]/.test(e.message)) return null; throw e; }
+      }
+      const files = await listFiles();
+      if (!files.length) return null;
+      let best = null;
+      for (const f of files) {
+        try {
+          const d = JSON.parse(await downloadFile(f.id));
+          const rev = +d.rev || 0, at = +d.updatedAt || 0;
+          if (!best || rev > best.rev || (rev === best.rev && at > best.at)) best = { doc: d, rev, at };
+        } catch (_) {}
+      }
+      return best ? best.doc : null;
+    }
+    // Most recent write recorded in a doc: { at, who, id }.
+    function lastEdit(d) {
+      const w = d && d.writers && typeof d.writers === "object" ? d.writers : {};
+      let best = null;
+      for (const k in w) {
+        const e = w[k];
+        if (e && e.at && (!best || e.at > best.at)) best = { at: e.at, who: e.name, id: k };
+      }
+      return best || { at: +((d && d.updatedAt) || 0), who: "a device", id: null };
+    }
+    function fmtEdit(info) {
+      if (!info || !info.at) return "was last saved at an unknown time";
+      const who = (info.who || "a device") + (info.id === CLIENT_ID ? " — this device" : "");
+      return "was last saved " + new Date(info.at).toLocaleString() + " by " + who;
+    }
+
+    // On connecting to a target (personal Drive or a shared file): if local and
+    // remote already match, just align and continue; otherwise ask which to keep,
+    // showing when each was last saved and by which device.
     let directionResolve = null;
-    function connectChoice(label) {
+    async function connectChoice(label) {
+      setStatus("Checking…");
+      let remote;
+      try { remote = await fetchRemoteDoc(); }
+      catch (e) { setStatus("Sync error: " + e.message, "err"); return; }
+      if (!remote) return syncNow(false, "forceUp"); // nothing there yet — just upload
+
+      const localContent = JSON.stringify({ activeId: doc.activeId, layouts: doc.layouts });
+      const remoteContent = JSON.stringify({ activeId: remote.activeId, layouts: remote.layouts });
+      if (localContent === remoteContent) {
+        setLastSeenRev(+remote.rev || 0);
+        setStatus("Already in sync · " + timeNow());
+        return;
+      }
+
       el("direction-title").textContent = "Working with " + label;
+      el("direction-local").textContent = "This device " + fmtEdit({ at: +doc.updatedAt || 0, who: clientLabel(), id: CLIENT_ID });
+      el("direction-remote").textContent = "Saved copy " + fmtEdit(lastEdit(remote));
       el("direction-modal").hidden = false;
-      return new Promise((resolve) => { directionResolve = resolve; }).then((dir) => {
-        if (dir) return syncNow(false, dir);
-      });
+      const dir = await new Promise((resolve) => { directionResolve = resolve; });
+      if (dir) return syncNow(false, dir);
     }
     function resolveDirection(dir) {
       el("direction-modal").hidden = true;
