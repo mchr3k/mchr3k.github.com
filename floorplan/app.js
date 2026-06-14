@@ -1808,6 +1808,7 @@
   }
 
   let saveTimer = null;
+  let pendingSave = false; // a debounced edit is waiting to be written
   let suppressSync = false; // true while applying a remote doc, to avoid loops
 
   // Write to localStorage + schedule a Drive sync, bumping the skew-proof
@@ -1823,12 +1824,22 @@
     if (!suppressSync) DRIVE.scheduleSync();
   }
   function save() {
+    pendingSave = false;
     persist();
     if (!suppressSync) recordHistory();
   }
   function saveSoon() {
+    pendingSave = true;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(save, 300);
+  }
+  // Flush an outstanding debounced save (on tab hide/close). Crucially does
+  // nothing when there's no pending edit — a plain reload must NOT count as a
+  // save (which would bump rev/updatedAt and let a stale copy win newest-wins).
+  function flushPendingSave() {
+    if (!pendingSave) return;
+    clearTimeout(saveTimer);
+    save();
   }
 
   // ---- Undo / redo: snapshots of plan content captured at each save ----
@@ -2407,6 +2418,14 @@
       const u = info.user ? " (" + info.user + ")" : "";
       return "was last saved " + new Date(info.at).toLocaleString() + " by " + dev + u;
     }
+    function olderBy(ms) {
+      const s = Math.max(1, Math.round(ms / 1000));
+      const pick = (n, unit) => n + " " + unit + (n === 1 ? "" : "s") + " older";
+      if (s < 60) return pick(s, "second");
+      if (s < 3600) return pick(Math.round(s / 60), "minute");
+      if (s < 86400) return pick(Math.round(s / 3600), "hour");
+      return pick(Math.round(s / 86400), "day");
+    }
 
     // On connecting to a target (personal Drive or a shared file): if local and
     // remote already match, just align and continue; otherwise ask which to keep,
@@ -2429,7 +2448,12 @@
       }
 
       el("direction-title").textContent = "Working with " + label;
-      el("direction-local").textContent = "This device " + fmtEdit({ at: +doc.updatedAt || 0, who: clientLabel(), id: CLIENT_ID, user: driveUser ? driveUser.name || driveUser.email : "" });
+      const localAt = +doc.updatedAt || 0;
+      const remoteAt = lastEdit(remote).at || +remote.updatedAt || 0;
+      const localNewer = localAt >= remoteAt;
+      el("direction-up-tag").textContent = localNewer ? "(newest)" : "(" + olderBy(remoteAt - localAt) + ")";
+      el("direction-down-tag").textContent = localNewer ? "(" + olderBy(localAt - remoteAt) + ")" : "(newest)";
+      el("direction-local").textContent = "This device " + fmtEdit({ at: localAt, who: clientLabel(), id: CLIENT_ID, user: driveUser ? driveUser.name || driveUser.email : "" });
       el("direction-remote").textContent = "Saved copy " + fmtEdit(lastEdit(remote));
       el("direction-modal").hidden = false;
       const dir = await new Promise((resolve) => { directionResolve = resolve; });
@@ -2669,8 +2693,8 @@
     }).observe(wrap);
   }
   // Flush any debounced save if the tab is being hidden or closed.
-  window.addEventListener("beforeunload", save);
-  document.addEventListener("visibilitychange", () => { if (document.hidden) save(); });
+  window.addEventListener("beforeunload", flushPendingSave);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) flushPendingSave(); });
 
   // ---------------------------------------------------------------------------
   // Boot
