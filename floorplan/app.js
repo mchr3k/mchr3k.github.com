@@ -35,6 +35,29 @@
   // View transform: screen_px = world_cm * scale + offset
   let view = { scale: 0.45, ox: 70, oy: 70 };
   let ui = { grid: true, snap: true, edges: true, gridCm: 10 };
+  // The Edge lengths / Grid / Snap toggles persist per device. Loaded into `ui`
+  // before the first render, then mirrored onto the checkboxes.
+  const UI_PREFS_KEY = "floorplan.uiprefs.v1";
+  function loadUiPrefs() {
+    try {
+      const p = JSON.parse(localStorage.getItem(UI_PREFS_KEY) || "null");
+      if (p && typeof p === "object") {
+        if (typeof p.grid === "boolean") ui.grid = p.grid;
+        if (typeof p.snap === "boolean") ui.snap = p.snap;
+        if (typeof p.edges === "boolean") ui.edges = p.edges;
+      }
+    } catch (_) {}
+  }
+  function saveUiPrefs() {
+    try {
+      localStorage.setItem(UI_PREFS_KEY, JSON.stringify({ grid: ui.grid, snap: ui.snap, edges: ui.edges }));
+    } catch (_) {}
+  }
+  function syncUiControls() {
+    el("chk-edges").checked = ui.edges;
+    el("chk-grid").checked = ui.grid;
+    el("chk-snap").checked = ui.snap;
+  }
   /** @type {{kind:'room'|'object', roomId:string, objId?:string}|null} */
   let selection = null;
   // When locked, the canvas is view/select-only: dragging pans and edge labels
@@ -2967,9 +2990,9 @@
     else if (v !== "__current") zoomTo(+v / 100);
     e.target.blur();
   });
-  el("chk-edges").addEventListener("change", (e) => { ui.edges = e.target.checked; render(); });
-  el("chk-grid").addEventListener("change", (e) => { ui.grid = e.target.checked; render(); });
-  el("chk-snap").addEventListener("change", (e) => { ui.snap = e.target.checked; });
+  el("chk-edges").addEventListener("change", (e) => { ui.edges = e.target.checked; saveUiPrefs(); render(); });
+  el("chk-grid").addEventListener("change", (e) => { ui.grid = e.target.checked; saveUiPrefs(); render(); });
+  el("chk-snap").addEventListener("change", (e) => { ui.snap = e.target.checked; saveUiPrefs(); });
   el("btn-export").addEventListener("click", exportPlan);
   el("btn-import").addEventListener("click", () => el("file-import").click());
   el("file-import").addEventListener("change", (e) => {
@@ -3036,6 +3059,8 @@
   // accidentally move things. Desktop (fine pointer) starts unlocked.
   setLocked(window.matchMedia("(pointer: coarse)").matches);
   bindPanel();
+  loadUiPrefs();      // restore Edge lengths / Grid / Snap before the first render
+  syncUiControls();   // reflect the restored prefs on the toolbar checkboxes
   renderLayoutBar();
   refreshPanel();
   fitView();
