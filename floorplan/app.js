@@ -1776,7 +1776,7 @@
     // shared plan). Like the Client ID it is not a secret, but you should
     // restrict it (Picker API + your site's HTTP referrers) in the Cloud Console.
     // Leave "" to fall back to the per-device key the user is prompted for.
-    const DEFAULT_API_KEY = "";
+    const DEFAULT_API_KEY = "AIzaSyCz_xdMDpKvj1Q97ICObW4OF0Dcm4MvNPI";
     const LS = {
       clientId: "floorplan.drive.clientId",
       fileId: "floorplan.drive.fileId",
