@@ -2296,7 +2296,13 @@
     };
 
     let clientId = localStorage.getItem(LS.clientId) || DEFAULT_CLIENT_ID;
-    let apiKey = localStorage.getItem(LS.apiKey) || DEFAULT_API_KEY;
+    // The Picker API key is baked in and managed behind the scenes. Older builds
+    // let the user enter their own key, stored under LS.apiKey; that stored value
+    // would override the baked-in key and, if stale/invalid, make the Picker fail
+    // with "The API developer key is invalid". So always use DEFAULT_API_KEY and
+    // purge any leftover stored key.
+    try { localStorage.removeItem(LS.apiKey); } catch (_) {}
+    let apiKey = DEFAULT_API_KEY;
 
     // Stable per-device id + editable label, written into the file so every
     // client can show who last wrote and when.
@@ -2363,8 +2369,31 @@
     let connected = localStorage.getItem(LS.connected) === "1";
     let auto = localStorage.getItem(LS.auto) !== "0";
     let lastSeenRev = +localStorage.getItem(LS.lastRev) || 0;
+    // Cache the OAuth access token in sessionStorage so a reload *within the same
+    // tab* reuses it and skips the Google account chooser. sessionStorage is
+    // scoped to the tab and cleared when the tab closes, so the token never
+    // lingers on the device or leaks to other tabs. Tokens last ~1h; after that
+    // the user picks an account again (once), then it's cached for the tab again.
+    const TOKEN_SS_KEY = "floorplan.drive.token";
     let token = null;
     let tokenExp = 0;
+    (function restoreToken() {
+      try {
+        const t = JSON.parse(sessionStorage.getItem(TOKEN_SS_KEY) || "null");
+        if (t && t.cid === clientId && t.token && Date.now() < t.exp - 60000) {
+          token = t.token; tokenExp = t.exp;
+        } else if (t) {
+          sessionStorage.removeItem(TOKEN_SS_KEY);
+        }
+      } catch (_) {}
+    })();
+    function persistToken() {
+      try {
+        if (token) sessionStorage.setItem(TOKEN_SS_KEY, JSON.stringify({ cid: clientId, token, exp: tokenExp }));
+        else sessionStorage.removeItem(TOKEN_SS_KEY);
+      } catch (_) {}
+    }
+    function clearToken() { token = null; tokenExp = 0; persistToken(); }
     let tokenClient = null;
     let busy = false;
     let timer = null;
@@ -2470,6 +2499,7 @@
           if (resp && resp.error) return reject(new Error(resp.error_description || resp.error));
           token = resp.access_token;
           tokenExp = Date.now() + (resp.expires_in ? resp.expires_in * 1000 : 3600000);
+          persistToken();
           resolve(token);
         };
         try {
@@ -2484,7 +2514,7 @@
       const t = await getToken(interactive);
       let res = await fetch(url, withAuth(opts, t));
       if (res.status === 401) {
-        token = null;
+        clearToken();
         const t2 = await getToken(true);
         res = await fetch(url, withAuth(opts, t2));
       }
@@ -2824,7 +2854,7 @@
       try {
         if (token && gisReady() && google.accounts.oauth2.revoke) google.accounts.oauth2.revoke(token, () => {});
       } catch (_) {}
-      token = null;
+      clearToken();
       connected = false;
       lsSet(LS.connected, "0");
       updateUI();
