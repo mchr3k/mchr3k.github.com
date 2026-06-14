@@ -2163,13 +2163,22 @@
     // On connecting to a target (personal Drive or a shared file), make the
     // direction explicit: upload this device's plan, or load the target and
     // discard local changes.
+    // On connecting to a target (personal Drive or a shared file), make the
+    // direction explicit with a modal: upload this device's plan, or load the
+    // target and discard local changes.
+    let directionResolve = null;
     function connectChoice(label) {
-      const up = confirm(
-        `Working with ${label}.\n\n` +
-          "OK — upload THIS device's current plan to it.\n" +
-          "Cancel — load it and discard this device's current changes."
-      );
-      return syncNow(false, up ? "forceUp" : "forceDown");
+      el("direction-title").textContent = "Working with " + label;
+      el("direction-modal").hidden = false;
+      return new Promise((resolve) => { directionResolve = resolve; }).then((dir) => {
+        if (dir) return syncNow(false, dir);
+      });
+    }
+    function resolveDirection(dir) {
+      el("direction-modal").hidden = true;
+      const r = directionResolve;
+      directionResolve = null;
+      if (r) r(dir);
     }
 
     async function connect() {
@@ -2274,6 +2283,10 @@
         clientName = e.target.value.trim();
         lsSet("floorplan.clientName", clientName);
       });
+      el("direction-upload").addEventListener("click", () => resolveDirection("forceUp"));
+      el("direction-load").addEventListener("click", () => resolveDirection("forceDown"));
+      el("direction-cancel").addEventListener("click", () => resolveDirection(null));
+      el("direction-modal").addEventListener("click", (e) => { if (e.target.id === "direction-modal") resolveDirection(null); });
       el("drive-force-up").addEventListener("click", () => {
         if (confirm("Overwrite the copy in Google Drive with THIS device's plan?")) syncNow(true, "forceUp");
       });
