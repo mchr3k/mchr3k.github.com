@@ -2395,6 +2395,10 @@
     // "local" works only on this device. Defaults to local so nothing pushes to
     // Drive until the user opts in.
     let sessionMode = "local";
+    // Set once a write to the pinned shared file is rejected (403) because the
+    // user only has read access. We then stop trying to push automatically and
+    // explain that edits stay on this device; a manual Sync re-tests access.
+    let sharedReadOnly = false;
 
     const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (_) {} };
     function setLastSeenRev(r) { lastSeenRev = Math.max(lastSeenRev, +r || 0); lsSet(LS.lastRev, String(lastSeenRev)); markSaved(); }
@@ -2561,6 +2565,7 @@
     // mode: "auto" | "firstConnect" | "forceUp" | "forceDown"
     async function syncNow(interactive, mode) {
       if (!connected || busy) return;
+      if (interactive) sharedReadOnly = false; // an explicit Sync/Force re-tests write access
       sessionMode = "drive"; // any sync means we're working against Drive
       busy = true;
       setStatus("Syncing…");
@@ -2681,7 +2686,19 @@
       const push = async (label) => {
         doc.writers = mergeWriters(remote && remote.writers, doc.writers);
         stampWriter();
-        await updateFile(sharedFileId, serialize());
+        try {
+          await updateFile(sharedFileId, serialize());
+        } catch (e) {
+          if (/Drive API 403/.test(e.message)) {
+            // The user can read this shared file but not write it.
+            sharedReadOnly = true;
+            setStatus("Read-only access — your changes are kept on this device but can't be saved to the shared plan.", "err");
+            pill();
+            return;
+          }
+          throw e;
+        }
+        sharedReadOnly = false;
         setLastSeenRev(+doc.rev || 0);
         try { localStorage.setItem(STORAGE_KEY, serialize()); } catch (_) {}
         setStatus(label + " · " + timeNow());
@@ -2696,7 +2713,10 @@
       } else if (remote && remoteRev > localRev) {
         await pull("Updated from shared plan");
       } else if (localRev > remoteRev) {
-        await push("Saved to shared plan");
+        // Known read-only: don't hammer Drive with doomed writes on every edit;
+        // just remind the user. A manual Sync clears the flag and re-tests.
+        if (sharedReadOnly) setStatus("Read-only — local changes stay on this device only.", "err");
+        else await push("Saved to shared plan");
       } else {
         setLastSeenRev(remoteRev);
         setStatus("Shared plan up to date · " + timeNow());
@@ -2905,6 +2925,7 @@
       const f = data.docs && data.docs[0];
       if (!f) return;
       sharedFileId = f.id;
+      sharedReadOnly = false;
       lsSet(LS.sharedFile, sharedFileId);
       connected = true; lsSet(LS.connected, "1");
       updateUI();
@@ -2912,6 +2933,7 @@
     }
     function leaveShared() {
       sharedFileId = "";
+      sharedReadOnly = false;
       lsSet(LS.sharedFile, "");
       updateUI();
       setStatus("Back to your own plan. Sync to load it.");
