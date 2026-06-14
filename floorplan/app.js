@@ -2296,7 +2296,13 @@
     };
 
     let clientId = localStorage.getItem(LS.clientId) || DEFAULT_CLIENT_ID;
-    let apiKey = localStorage.getItem(LS.apiKey) || DEFAULT_API_KEY;
+    // The Picker API key is baked in and managed behind the scenes. Older builds
+    // let the user enter their own key, stored under LS.apiKey; that stored value
+    // would override the baked-in key and, if stale/invalid, make the Picker fail
+    // with "The API developer key is invalid". So always use DEFAULT_API_KEY and
+    // purge any leftover stored key.
+    try { localStorage.removeItem(LS.apiKey); } catch (_) {}
+    let apiKey = DEFAULT_API_KEY;
 
     // Stable per-device id + editable label, written into the file so every
     // client can show who last wrote and when.
