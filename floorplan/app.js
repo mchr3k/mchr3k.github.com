@@ -385,7 +385,7 @@
         start = cursor + op.gap;
       }
       const end = start + op.width;
-      out.push({ id: op.id, type: op.type, hinge: op.hinge, start, end, fits: end <= wallLen + 0.5 });
+      out.push({ id: op.id, type: op.type, hinge: op.hinge, swing: op.swing, start, end, fits: end <= wallLen + 0.5 });
       cursor = end;
     }
     return out;
@@ -408,7 +408,7 @@
         if (b - a < 0.5) continue;
         const p1 = worldToScreen(room.x + sx + dir[0] * a, room.y + sy + dir[1] * a);
         const p2 = worldToScreen(room.x + sx + dir[0] * b, room.y + sy + dir[1] * b);
-        if (p.type === "door") drawDoor(g, p1, p2, inward, room.id, p.id, p.hinge);
+        if (p.type === "door") drawDoor(g, p1, p2, inward, room.id, p.id, p.hinge, p.swing);
         else drawWindow(g, p1, p2, inward, room.id, p.id);
       }
     }
@@ -439,12 +439,12 @@
     return s;
   }
 
-  function drawDoor(g, p1, p2, inward, roomId, opId, hinge) {
+  function drawDoor(g, p1, p2, inward, roomId, opId, hinge, swing) {
     const r = dist(p1, p2);
-    const out = [-inward[0], -inward[1]]; // door swings to the outside of the room
+    const dirVec = swing === "in" ? inward : [-inward[0], -inward[1]];
     const hingePt = hinge === "end" ? p2 : p1;
     const farPt = hinge === "end" ? p1 : p2;
-    const tip = [hingePt[0] + out[0] * r, hingePt[1] + out[1] * r];
+    const tip = [hingePt[0] + dirVec[0] * r, hingePt[1] + dirVec[1] * r];
     const eg = svgEl("g", { class: "opening door", "data-room": roomId, "data-opening": opId, style: "pointer-events:none" });
     maskWall(eg, p1, p2);
     // Swing arc from the closed (far jamb) to the open (tip) position, centred on the hinge.
@@ -1128,7 +1128,9 @@
       openingField(o, "gap", "Gap (cm)", "number"),
       openingField(o, "width", "Width (cm)", "number")
     );
-    if (o.type === "door") grid.append(openingField(o, "hinge", "Hinge", "hinge"));
+    if (o.type === "door") {
+      grid.append(openingField(o, "hinge", "Hinge", "hinge"), openingField(o, "swing", "Swing", "swing"));
+    }
     li.append(head, grid);
     return li;
   }
@@ -1147,12 +1149,16 @@
     const span = document.createElement("span");
     span.textContent = label;
     let input;
-    if (type === "select" || type === "type" || type === "hinge") {
+    if (type === "select" || type === "type" || type === "hinge" || type === "swing") {
       input = document.createElement("select");
       const labels = type === "type" ? { door: "Door", window: "Window" }
         : type === "hinge" ? { start: "Wall start", end: "Wall end" }
+        : type === "swing" ? { out: "Outward", in: "Inward" }
         : SIDE_LABELS;
-      const opts = type === "type" ? ["door", "window"] : type === "hinge" ? ["start", "end"] : ["top", "right", "bottom", "left"];
+      const opts = type === "type" ? ["door", "window"]
+        : type === "hinge" ? ["start", "end"]
+        : type === "swing" ? ["out", "in"]
+        : ["top", "right", "bottom", "left"];
       for (const s of opts) {
         const opt = document.createElement("option");
         opt.value = s;
@@ -1185,7 +1191,7 @@
     const room = r.room;
     if (!room.openings) room.openings = [];
     const lastSide = room.openings.length ? room.openings[room.openings.length - 1].side : "top";
-    room.openings.push({ id: uid("op"), type, side: lastSide, hinge: "start", gap: 50, width: type === "door" ? 80 : 120 });
+    room.openings.push({ id: uid("op"), type, side: lastSide, hinge: "start", swing: "out", gap: 50, width: type === "door" ? 80 : 120 });
     save();
     render();
     refreshPanel();
@@ -1548,6 +1554,7 @@
           type: o.type === "window" ? "window" : "door",
           side: o.side,
           hinge: o.hinge === "end" ? "end" : "start",
+          swing: o.swing === "in" ? "in" : "out",
           gap: Math.max(0, Math.round(+o.gap || 0)),
           width: Math.max(1, Math.round(+o.width || 80)),
         })),
