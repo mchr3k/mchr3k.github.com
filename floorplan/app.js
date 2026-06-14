@@ -883,10 +883,18 @@
       "text-anchor": "middle", "font-size": size, "font-weight": weight, fill: "#1f2933",
       "font-family": "system-ui, sans-serif", style: "pointer-events:none; user-select:none",
     };
-    if (vertical) attrs.transform = `rotate(-90 ${center[0].toFixed(1)} ${center[1].toFixed(1)})`;
     const t = svgEl("text", attrs);
     lines.forEach((ln, i) => t.appendChild(svgEl("tspan", { x: center[0], y: startY + i * lineH }, ln)));
-    g.appendChild(t);
+    if (vertical) {
+      // iOS Safari/WebKit ignores a `transform` set directly on <text> (more so
+      // when it holds <tspan>s with absolute x/y), so rotate a wrapping <g>
+      // instead — that renders consistently across browsers.
+      const rg = svgEl("g", { transform: `rotate(-90 ${center[0].toFixed(1)} ${center[1].toFixed(1)})` });
+      rg.appendChild(t);
+      g.appendChild(rg);
+    } else {
+      g.appendChild(t);
+    }
   }
 
   function textLabel(x, y, str, opt = {}) {
