@@ -402,11 +402,12 @@
     return null;
   }
 
-  // Place the room name tightly just inside the top-left, a fixed distance below
-  // the top wall. The whole glyph band must fit inside the outline — sampled at
-  // several rows so a cut-in intruding into the *top* of the text still pushes
-  // it right or down. Drops to a lower band when squeezed, contracting to two
-  // characters before giving up.
+  // Place the room name tightly just inside the top, a fixed distance below the
+  // top wall. The whole glyph band must fit inside the outline — sampled at
+  // several rows so a cut-in intruding into the *top* of the text pushes it
+  // aside. Within each band the name first slides right past any room object
+  // (staying high), and only drops to a lower band when nothing in this one is
+  // clear; it contracts to two characters before giving up.
   function roomLabelPlacement(corners, name, objRects) {
     const ys = corners.map((p) => p[1]);
     const minY = Math.min(...ys), maxY = Math.max(...ys);
@@ -424,19 +425,31 @@
         R = Math.min(R, span[1]);
       }
       if (!ok || R - L < 14) continue;
-      const text = fitLabel(name, R - L - pad * 2, 15, 700, 2);
-      if (!text) continue;
-      const place = { x: L + pad, y: baseline, text };
-      // Remember the first band that fits so the name always shows somewhere,
-      // but prefer a band that doesn't sit on top of a room object.
-      if (!fallback) fallback = place;
-      if (objRects && objRects.length) {
-        const tw = measureText(text, 15, 700);
-        const rect = { x0: L + pad, x1: L + pad + tw, y0: baseline - 13, y1: baseline + 4 };
-        const hit = objRects.some((o) => rect.x0 < o.x1 && rect.x1 > o.x0 && rect.y0 < o.y1 && rect.y1 > o.y0);
-        if (hit) continue;
+      // The free horizontal slots in this band: [L,R] minus the x-spans of any
+      // objects whose box overlaps the glyph rows, so the label can sit to the
+      // right of an object rather than dropping a whole band.
+      const ty0 = baseline - 13, ty1 = baseline + 4;
+      const blocks = (objRects || [])
+        .filter((o) => o.y0 < ty1 && o.y1 > ty0 && o.x1 > L && o.x0 < R)
+        .map((o) => [Math.max(L, o.x0), Math.min(R, o.x1)])
+        .sort((a, b) => a[0] - b[0]);
+      const free = [];
+      let cur = L + pad;
+      for (const [bx0, bx1] of blocks) {
+        if (bx0 - pad > cur) free.push([cur, bx0 - pad]);
+        cur = Math.max(cur, bx1 + pad);
       }
-      return place;
+      if (R - pad > cur) free.push([cur, R - pad]);
+      // Prefer the first slot (highest band, then leftmost) that shows the whole
+      // name; remember the first that fits anything as a fallback.
+      for (const [fx0, fx1] of free) {
+        if (fx1 - fx0 < 14) continue;
+        const text = fitLabel(name, fx1 - fx0, 15, 700, 2);
+        if (!text) continue;
+        const place = { x: fx0, y: baseline, text };
+        if (!fallback) fallback = place;
+        if (!text.includes("…")) return place;
+      }
     }
     return fallback;
   }
@@ -829,7 +842,7 @@
       return { size, vertical, lines, clipped: lines.some((l) => l.includes("…")) };
     };
     let chosen = null, smallest = null;
-    for (const s of [13, 12, 11, 10, 9]) {
+    for (const s of [13, 12, 11, 10, 9, 8, 7, 6]) {
       const lay = layoutAt(s);
       if (!lay) continue;
       smallest = lay;
