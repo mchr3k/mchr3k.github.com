@@ -302,6 +302,17 @@
     return corners.map((c) => `${c[0].toFixed(1)},${c[1].toFixed(1)}`).join(" ");
   }
 
+  // Fit a name into `availPx` of on-screen width at the given font size.
+  // Returns the full name if it fits, an ellipsised version while at least
+  // `minChars` real characters still fit, or null when it's too small to show.
+  function fitLabel(name, availPx, size, minChars) {
+    const charW = size * 0.6; // rough per-character width
+    const maxChars = Math.floor(availPx / charW);
+    if (maxChars >= name.length) return name;
+    if (maxChars - 1 >= minChars) return name.slice(0, maxChars - 1) + "…";
+    return null;
+  }
+
   function drawRoom(room) {
     const sel = selection && selection.kind === "room" && selection.roomId === room.id;
     const geo = itemGeometry(room, room, 0);
@@ -318,9 +329,13 @@
       })
     );
 
-    // Room name (top-left, inside)
-    const [nx, ny] = geo.corners[0];
-    g.appendChild(textLabel(nx + 8, ny + 20, room.name, { weight: 700, size: 15, fill: "#1f2933" }));
+    // Room name (top-left, inside) — contracted with an ellipsis to fit the
+    // room's on-screen width, and dropped once it's too small to be useful.
+    const roomName = fitLabel(room.name, room.w * view.scale - 16, 15, 5);
+    if (roomName && room.h * view.scale > 26) {
+      const [nx, ny] = geo.corners[0];
+      g.appendChild(textLabel(nx + 8, ny + 20, roomName, { weight: 700, size: 15, fill: "#1f2933" }));
+    }
 
     drawEdgeLabels(g, geo, room, room.id, null);
     if (sel) drawHandles(g, geo);
@@ -352,11 +367,16 @@
       })
     );
 
-    g.appendChild(
-      textLabel(geo.center[0], geo.center[1] + 4, obj.name, {
-        weight: 600, size: 13, fill: "#1f2933", anchor: "middle",
-      })
-    );
+    // Object name, centred — contracted with an ellipsis to fit the object's
+    // width, hidden only once fewer than ~5 real characters would fit.
+    const objName = fitLabel(obj.name, obj.w * view.scale - 8, 13, 5);
+    if (objName && obj.h * view.scale > 18) {
+      g.appendChild(
+        textLabel(geo.center[0], geo.center[1] + 4, objName, {
+          weight: 600, size: 13, fill: "#1f2933", anchor: "middle",
+        })
+      );
+    }
 
     drawEdgeLabels(g, geo, obj, room.id, obj.id);
     if (sel) drawHandles(g, geo);
@@ -385,6 +405,9 @@
       const [lx, ly] = e.labelScreen;
       const txt = `${round(e.len)} cm`;
       const wpx = txt.length * 6.6 + 8;
+      // Declutter: skip an edge whose on-screen length can't hold its own label
+      // (this is what overlaps/crowds when zoomed out).
+      if (e.len * view.scale < wpx) continue;
       const eg = svgEl("g", {
         class: "edge-label",
         "data-kind": "edge",
