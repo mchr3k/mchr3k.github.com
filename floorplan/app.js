@@ -414,35 +414,68 @@
     return out;
   }
 
+  // Lay out one wall's openings against its cut-outs, keeping each opening's
+  // object so a drag can find its neighbours.
+  function wallLayout(room, side) {
+    const S = SIDES[side];
+    const wallLen = S.len(room);
+    const cutouts = (room.notches || []).filter((n) => n.side === side).map((n) => [n.pos, n.pos + n.width]);
+    const ops = (room.openings || []).filter((o) => o.side === side);
+    const placed = layoutWallOpenings(wallLen, cutouts, ops).map((p, i) => ({ ...p, op: ops[i] }));
+    return { S, wallLen, cutouts, ops, placed };
+  }
+
   function drawOpenings(g, room) {
-    const openings = room.openings || [];
-    if (!openings.length) return;
+    if (!(room.openings || []).length) return;
     for (const side of ["top", "right", "bottom", "left"]) {
-      const ops = openings.filter((o) => o.side === side);
-      if (!ops.length) continue;
-      const S = SIDES[side];
-      const wallLen = S.len(room);
-      const cutouts = (room.notches || []).filter((n) => n.side === side).map((n) => [n.pos, n.pos + n.width]);
-      const [sx, sy] = S.start(room);
-      const dir = S.dir;
+      const L = wallLayout(room, side);
+      if (!L.placed.length) continue;
+      const [sx, sy] = L.S.start(room);
+      const dir = L.S.dir;
       const inward = [-dir[1], dir[0]]; // unit vector pointing into the room
-      for (const p of layoutWallOpenings(wallLen, cutouts, ops)) {
-        const a = clamp(p.start, 0, wallLen), b = clamp(p.end, 0, wallLen);
+      const at = (m) => worldToScreen(room.x + sx + dir[0] * m, room.y + sy + dir[1] * m);
+      for (const p of L.placed) {
+        const a = clamp(p.start, 0, L.wallLen), b = clamp(p.end, 0, L.wallLen);
         if (b - a < 0.5) continue;
-        const p1 = worldToScreen(room.x + sx + dir[0] * a, room.y + sy + dir[1] * a);
-        const p2 = worldToScreen(room.x + sx + dir[0] * b, room.y + sy + dir[1] * b);
-        if (p.type === "door") drawDoor(g, p1, p2, inward, room.id, p.id, p.hinge, p.swing);
-        else drawWindow(g, p1, p2, inward, room.id, p.id);
+        const p1 = at(a), p2 = at(b);
+        if (p.type === "door") drawDoor(g, p1, p2, inward, room.id, p.op.id, p.hinge, p.swing);
+        else drawWindow(g, p1, p2, inward, room.id, p.op.id);
+        // While dragging this opening, show the clear gap on each side.
+        if (drag && drag.type === "opening" && drag.op === p.op) {
+          drawGapLabel(g, at, inward, drag.prevEnd, p.start);
+          drawGapLabel(g, at, inward, p.end, drag.nextStart);
+        }
       }
     }
+  }
+
+  function drawGapLabel(g, at, inward, m0, m1) {
+    const gap = Math.round(m1 - m0);
+    if (gap < 1) return;
+    const [mx, my] = at((m0 + m1) / 2);
+    const x = mx + inward[0] * 13, y = my + inward[1] * 13;
+    const txt = gap + " cm";
+    const wpx = measureText(txt, 11) + 10;
+    g.appendChild(svgEl("rect", { x: x - wpx / 2, y: y - 9, width: wpx, height: 18, rx: 4, fill: "#fef3c7", "fill-opacity": 0.96, stroke: "#f59e0b", "stroke-width": 1, style: "pointer-events:none" }));
+    g.appendChild(svgEl("text", { x, y: y + 4, "font-size": 11, "text-anchor": "middle", fill: "#92400e", "font-family": "system-ui, sans-serif", style: "pointer-events:none" }, txt));
   }
 
   function maskWall(g, p1, p2) {
     // Open the wall under an opening with a clean white gap.
     g.appendChild(svgEl("line", {
       x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1],
-      stroke: "#ffffff", "stroke-width": 5, "stroke-linecap": "butt",
+      stroke: "#ffffff", "stroke-width": 5, "stroke-linecap": "butt", style: "pointer-events:none",
     }));
+  }
+
+  // Transparent grab area spanning the opening, so it can be dragged along the wall.
+  function openingHit(eg, p1, p2, inward) {
+    const o = 9;
+    const pts = [
+      [p1[0] + inward[0] * o, p1[1] + inward[1] * o], [p2[0] + inward[0] * o, p2[1] + inward[1] * o],
+      [p2[0] - inward[0] * o, p2[1] - inward[1] * o], [p1[0] - inward[0] * o, p1[1] - inward[1] * o],
+    ];
+    eg.appendChild(svgEl("polygon", { points: pts.map((q) => q[0].toFixed(1) + "," + q[1].toFixed(1)).join(" "), fill: "#000", "fill-opacity": 0, style: "pointer-events:all" }));
   }
 
   // A quarter-circle path centred on (cx,cy), from `fromPt` to `toPt`, sampled so
@@ -468,29 +501,31 @@
     const hingePt = hinge === "end" ? p2 : p1;
     const farPt = hinge === "end" ? p1 : p2;
     const tip = [hingePt[0] + dirVec[0] * r, hingePt[1] + dirVec[1] * r];
-    const eg = svgEl("g", { class: "opening door", "data-room": roomId, "data-opening": opId, style: "pointer-events:none" });
+    const eg = svgEl("g", { class: "opening door", "data-kind": "opening", "data-room": roomId, "data-opening": opId, style: "cursor:move" });
+    openingHit(eg, p1, p2, inward);
     maskWall(eg, p1, p2);
     // Swing arc from the closed (far jamb) to the open (tip) position, centred on the hinge.
     eg.appendChild(svgEl("path", {
       d: arcPath(hingePt[0], hingePt[1], r, farPt, tip),
-      fill: "none", stroke: "#64748b", "stroke-width": 1, "stroke-dasharray": "3 3",
+      fill: "none", stroke: "#64748b", "stroke-width": 1, "stroke-dasharray": "3 3", style: "pointer-events:none",
     }));
-    eg.appendChild(svgEl("line", { x1: hingePt[0], y1: hingePt[1], x2: tip[0], y2: tip[1], stroke: "#475569", "stroke-width": 2 }));
+    eg.appendChild(svgEl("line", { x1: hingePt[0], y1: hingePt[1], x2: tip[0], y2: tip[1], stroke: "#475569", "stroke-width": 2, style: "pointer-events:none" }));
     g.appendChild(eg);
   }
 
   function drawWindow(g, p1, p2, inward, roomId, opId) {
-    const eg = svgEl("g", { class: "opening window", "data-room": roomId, "data-opening": opId, style: "pointer-events:none" });
+    const eg = svgEl("g", { class: "opening window", "data-kind": "opening", "data-room": roomId, "data-opening": opId, style: "cursor:move" });
+    openingHit(eg, p1, p2, inward);
     maskWall(eg, p1, p2);
     const o = 2.2; // half the frame thickness in px
     for (const s of [o, -o]) {
       eg.appendChild(svgEl("line", {
         x1: p1[0] + inward[0] * s, y1: p1[1] + inward[1] * s,
         x2: p2[0] + inward[0] * s, y2: p2[1] + inward[1] * s,
-        stroke: "#2563eb", "stroke-width": 1.4,
+        stroke: "#2563eb", "stroke-width": 1.4, style: "pointer-events:none",
       }));
     }
-    eg.appendChild(svgEl("line", { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1], stroke: "#93c5fd", "stroke-width": 1 }));
+    eg.appendChild(svgEl("line", { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1], stroke: "#93c5fd", "stroke-width": 1, style: "pointer-events:none" }));
     g.appendChild(eg);
   }
 
@@ -724,6 +759,11 @@
       return;
     }
 
+    if (kind === "opening") {
+      startOpeningDrag(target, gmx, gmy);
+      return;
+    }
+
     if (kind === "object") {
       const wasSelected = sameSel(selection, { kind: "object", roomId, objId });
       select({ kind: "object", roomId, objId });
@@ -744,6 +784,31 @@
     if (e.target.closest("[data-kind]")) return;
     select(null);
     drag = { type: "pan", startOx: view.ox, startOy: view.oy, startMx: mousePos(e)[0], startMy: mousePos(e)[1] };
+  }
+
+  // Begin dragging an opening along its wall. Captures the free slot between its
+  // neighbours (cut-outs / other openings / wall ends) so the drag is clamped and
+  // the next opening can be held in place.
+  function startOpeningDrag(target, gmx, gmy) {
+    const roomId = target.getAttribute("data-room");
+    const opId = target.getAttribute("data-opening");
+    const room = state.rooms.find((r) => r.id === roomId);
+    if (!room) return;
+    const op = (room.openings || []).find((o) => o.id === opId);
+    if (!op) return;
+    const L = wallLayout(room, op.side);
+    const P = L.placed.find((p) => p.op === op);
+    if (!P) return;
+    const feats = L.cutouts
+      .map(([s, e]) => ({ s, e, op: null }))
+      .concat(L.placed.filter((p) => p.op !== op).map((p) => ({ s: p.start, e: p.end, op: p.op })));
+    let prevEnd = 0, nextStart = L.wallLen, nextOp = null;
+    for (const f of feats) if (f.e <= P.start + 0.5) prevEnd = Math.max(prevEnd, f.e);
+    for (const f of feats) if (f.s >= P.end - 0.5 && f.s < nextStart) { nextStart = f.s; nextOp = f.op; }
+    drag = {
+      type: "opening", room, op, S: L.S, width: P.end - P.start,
+      prevEnd, nextStart, nextOp, grabStart: P.start, startMx: gmx, startMy: gmy, moved: false,
+    };
   }
 
   function onPointerMove(e) {
@@ -780,6 +845,18 @@
       return;
     }
 
+    if (drag.type === "opening") {
+      const dir = drag.S.dir; // unit along the wall (axis-aligned)
+      const along = ((mx - drag.startMx) * dir[0] + (my - drag.startMy) * dir[1]) / view.scale;
+      if (!drag.moved && Math.abs(along * view.scale) < TAP_SLOP) return;
+      drag.moved = true;
+      const ns = clamp(drag.grabStart + along, drag.prevEnd, drag.nextStart - drag.width);
+      drag.op.gap = Math.max(0, Math.round(ns - drag.prevEnd));
+      if (drag.nextOp) drag.nextOp.gap = Math.max(0, Math.round(drag.nextStart - (ns + drag.width)));
+      render();
+      return;
+    }
+
     // Ignore tiny finger jitter so a tap stays a tap (and can deselect).
     if (!drag.moved) {
       if (Math.hypot(mx - drag.grabMx, my - drag.grabMy) < TAP_SLOP) return;
@@ -811,6 +888,8 @@
         // Panning doesn't mutate content. A locked tap (no pan) on the already-
         // selected item deselects it.
         if (!drag.moved && drag.lockSel && drag.wasSelected) select(null);
+      } else if (drag.type === "opening") {
+        if (drag.moved) { save(); render(); refreshPanel(); } // drop the live gap labels + sync the panel
       } else if (drag.moved) {
         save();
       } else if (drag.wasSelected) {
