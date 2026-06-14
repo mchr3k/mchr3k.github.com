@@ -1820,9 +1820,21 @@
       return os ? browser + " on " + os : browser;
     }
     const clientLabel = () => clientName || deviceDescription();
+    // The signed-in Google account (so collaborators see *who* edited a shared
+    // file, not just which device). Populated from the Drive API.
+    let driveUser = null; // { name, email }
+    async function fetchDriveUser() {
+      try {
+        const res = await api("https://www.googleapis.com/drive/v3/about?fields=user(displayName,emailAddress)");
+        const d = await res.json();
+        if (d && d.user) driveUser = { name: d.user.displayName || "", email: d.user.emailAddress || "" };
+      } catch (_) { /* leave null; we'll just show the device */ }
+    }
     function stampWriter() {
       if (!doc.writers || typeof doc.writers !== "object") doc.writers = {};
-      doc.writers[CLIENT_ID] = { name: clientLabel(), at: Date.now(), rev: +doc.rev || 0 };
+      const entry = { name: clientLabel(), at: Date.now(), rev: +doc.rev || 0 };
+      if (driveUser) { entry.user = driveUser.name || ""; entry.email = driveUser.email || ""; }
+      doc.writers[CLIENT_ID] = entry;
     }
     function mergeWriters(a, b) {
       const out = {};
@@ -1908,7 +1920,8 @@
         const row = document.createElement("div");
         row.className = "writer-row";
         const who = (e.name ? String(e.name) : "Device") + (id === CLIENT_ID ? " (this device)" : "");
-        row.textContent = who + " · " + new Date(e.at).toLocaleString();
+        const u = e.user || e.email ? " · " + String(e.user || e.email) : "";
+        row.textContent = who + u + " · " + new Date(e.at).toLocaleString();
         box.appendChild(row);
       }
     }
@@ -2008,6 +2021,7 @@
       setStatus("Syncing…");
       try {
         await getToken(interactive);
+        if (!driveUser) await fetchDriveUser(); // so writes record who, not just the device
 
         // Pinned to a shared file -> sync only against that one file.
         if (sharedFileId) { await syncSharedFile(mode); return; }
@@ -2020,6 +2034,7 @@
           fileId = await createFile(serialize());
           lsSet(LS.fileId, fileId);
           setLastSeenRev(+doc.rev || 0);
+          try { localStorage.setItem(STORAGE_KEY, serialize()); } catch (_) {}
           setStatus("Saved to Drive · " + timeNow());
           pill();
           return;
@@ -2056,6 +2071,7 @@
           stampWriter();
           await updateFile(canonical, serialize());
           setLastSeenRev(+doc.rev || 0);
+          try { localStorage.setItem(STORAGE_KEY, serialize()); } catch (_) {} // keep local writers in step
           setStatus(label + note + " · " + timeNow());
         };
 
@@ -2122,6 +2138,7 @@
         stampWriter();
         await updateFile(sharedFileId, serialize());
         setLastSeenRev(+doc.rev || 0);
+        try { localStorage.setItem(STORAGE_KEY, serialize()); } catch (_) {}
         setStatus(label + " · " + timeNow());
       };
       if (mode === "forceDown") {
@@ -2203,20 +2220,21 @@
       }
       return best ? best.doc : null;
     }
-    // Most recent write recorded in a doc: { at, who, id }.
+    // Most recent write recorded in a doc: { at, who, id, user }.
     function lastEdit(d) {
       const w = d && d.writers && typeof d.writers === "object" ? d.writers : {};
       let best = null;
       for (const k in w) {
         const e = w[k];
-        if (e && e.at && (!best || e.at > best.at)) best = { at: e.at, who: e.name, id: k };
+        if (e && e.at && (!best || e.at > best.at)) best = { at: e.at, who: e.name, id: k, user: e.user || e.email };
       }
       return best || { at: +((d && d.updatedAt) || 0), who: "a device", id: null };
     }
     function fmtEdit(info) {
       if (!info || !info.at) return "was last saved at an unknown time";
-      const who = (info.who || "a device") + (info.id === CLIENT_ID ? " — this device" : "");
-      return "was last saved " + new Date(info.at).toLocaleString() + " by " + who;
+      const dev = (info.who || "a device") + (info.id === CLIENT_ID ? " — this device" : "");
+      const u = info.user ? " (" + info.user + ")" : "";
+      return "was last saved " + new Date(info.at).toLocaleString() + " by " + dev + u;
     }
 
     // On connecting to a target (personal Drive or a shared file): if local and
@@ -2225,6 +2243,7 @@
     let directionResolve = null;
     async function connectChoice(label) {
       setStatus("Checking…");
+      if (!driveUser) await fetchDriveUser();
       let remote;
       try { remote = await fetchRemoteDoc(); }
       catch (e) { setStatus("Sync error: " + e.message, "err"); return; }
@@ -2239,7 +2258,7 @@
       }
 
       el("direction-title").textContent = "Working with " + label;
-      el("direction-local").textContent = "This device " + fmtEdit({ at: +doc.updatedAt || 0, who: clientLabel(), id: CLIENT_ID });
+      el("direction-local").textContent = "This device " + fmtEdit({ at: +doc.updatedAt || 0, who: clientLabel(), id: CLIENT_ID, user: driveUser ? driveUser.name || driveUser.email : "" });
       el("direction-remote").textContent = "Saved copy " + fmtEdit(lastEdit(remote));
       el("direction-modal").hidden = false;
       const dir = await new Promise((resolve) => { directionResolve = resolve; });
