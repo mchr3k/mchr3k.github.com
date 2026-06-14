@@ -314,12 +314,24 @@
     return corners.map((c) => `${c[0].toFixed(1)},${c[1].toFixed(1)}`).join(" ");
   }
 
-  // Measure real rendered text width (cached 2D context), so labels contract
-  // only when they genuinely don't fit — not on a conservative guess.
-  const _measureCtx = document.createElement("canvas").getContext("2d");
+  // Measure text with the same SVG engine that renders it. (A canvas
+  // measureText disagrees with SVG text metrics on some platforms — notably
+  // iOS — which made labels overflow/misalign.)
+  const _measText = document.createElementNS(SVGNS, "text");
+  _measText.setAttribute("font-family", "system-ui, sans-serif");
+  (function () {
+    const s = document.createElementNS(SVGNS, "svg");
+    s.setAttribute("aria-hidden", "true");
+    s.style.cssText = "position:absolute;width:0;height:0;overflow:hidden;visibility:hidden";
+    s.appendChild(_measText);
+    (document.body || document.documentElement).appendChild(s);
+  })();
   function measureText(str, size, weight) {
-    _measureCtx.font = `${weight || 400} ${size}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
-    return _measureCtx.measureText(str).width;
+    _measText.setAttribute("font-size", size);
+    _measText.setAttribute("font-weight", weight || 400);
+    _measText.textContent = str;
+    const w = _measText.getComputedTextLength();
+    return w || str.length * size * 0.55; // fallback if metrics unavailable
   }
 
   // Fit a name into `availPx`: the full name if it measures within, otherwise
@@ -334,9 +346,9 @@
     return null;
   }
 
-  // The leftmost interior horizontal span [x0,x1] of the outline at screen-y `y`
-  // (so the label respects a cut-in eating into that row), or null if the line
-  // misses the polygon.
+  // The leftmost non-degenerate interior horizontal span [x0,x1] of the outline
+  // at screen-y `y` (so the label respects a cut-in eating into that row), or
+  // null if the line misses the polygon's interior.
   function leftInteriorSpanAt(corners, y) {
     const xs = [];
     for (let i = 0; i < corners.length; i++) {
@@ -345,25 +357,36 @@
         xs.push(a[0] + ((y - a[1]) / (b[1] - a[1])) * (b[0] - a[0]));
       }
     }
-    if (xs.length < 2) return null;
     xs.sort((p, q) => p - q);
-    return [xs[0], xs[1]];
+    for (let i = 0; i + 1 < xs.length; i += 2) {
+      if (xs[i + 1] - xs[i] > 1) return [xs[i], xs[i + 1]]; // first real interior interval
+    }
+    return null;
   }
 
-  // Place the room name tightly in the top-left. Drops to a lower band when a
-  // cut-out (or the zoom level) leaves too little room up there, and uses minimal
-  // padding so the full name survives as long as possible before truncating.
+  // Place the room name tightly just inside the top-left, a fixed distance below
+  // the top wall. The whole glyph band must fit inside the outline — sampled at
+  // several rows so a cut-in intruding into the *top* of the text still pushes
+  // it right or down. Drops to a lower band when squeezed, contracting to two
+  // characters before giving up.
   function roomLabelPlacement(corners, name) {
     const ys = corners.map((p) => p[1]);
-    const minY = Math.min(...ys), maxY = Math.max(...ys), hPx = maxY - minY;
-    if (hPx < 22) return null;
-    const pad = 5;
-    for (const f of [0.16, 0.4, 0.62]) {
-      const y = minY + hPx * f;
-      const span = leftInteriorSpanAt(corners, y);
-      if (!span || span[1] - span[0] < 18) continue;
-      const text = fitLabel(name, span[1] - span[0] - pad * 2, 15, 700, 5);
-      if (text) return { x: span[0] + pad, y: y + 16, text };
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    if (maxY - minY < 24) return null;
+    const pad = 6;
+    for (const dy of [21, 44, 67]) {
+      const baseline = minY + dy;
+      if (baseline > maxY - 3) break;
+      let L = -Infinity, R = Infinity, ok = true;
+      for (const yy of [baseline - 12, baseline - 7, baseline - 2, baseline + 3]) {
+        const span = leftInteriorSpanAt(corners, yy);
+        if (!span) { ok = false; break; }
+        L = Math.max(L, span[0]);
+        R = Math.min(R, span[1]);
+      }
+      if (!ok || R - L < 14) continue;
+      const text = fitLabel(name, R - L - pad * 2, 15, 700, 2);
+      if (text) return { x: L + pad, y: baseline, text };
     }
     return null;
   }
@@ -526,7 +549,7 @@
 
     // Object name, centred — contracted with an ellipsis to fit the object's
     // width, hidden only once fewer than ~5 real characters would fit.
-    const objName = fitLabel(obj.name, obj.w * view.scale - 8, 13, 600, 5);
+    const objName = fitLabel(obj.name, obj.w * view.scale - 8, 13, 600, 2);
     if (objName && obj.h * view.scale > 18) {
       g.appendChild(
         textLabel(geo.center[0], geo.center[1] + 4, objName, {
