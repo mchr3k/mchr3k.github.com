@@ -2280,29 +2280,23 @@
     // authorised-origins allowlist are what protect it. Forks can override it via
     // the in-app field, which is stored in localStorage and takes precedence.
     const DEFAULT_CLIENT_ID = "570993263806-e6ga4lb5137114grenq6ucjtmq159o4q.apps.googleusercontent.com";
-    // Baked-in default Google API key, used only by the Picker (for opening a
-    // shared plan). Like the Client ID it is not a secret, but you should
-    // restrict it (Picker API + your site's HTTP referrers) in the Cloud Console.
-    // Leave "" to fall back to the per-device key the user is prompted for.
-    const DEFAULT_API_KEY = "AIzaSyCz_xdMDpKvj1Q97ICObW4OF0Dcm4MvNPI";
+    // No Google API / developer key: the Picker authenticates with the OAuth
+    // token alone (sufficient for a drive.file picker), so the app needs no API
+    // key at all. Earlier builds baked one in and let users enter their own,
+    // stored under "floorplan.drive.apiKey"; that key is gone now, so we just
+    // purge any leftover stored value below.
     const LS = {
       clientId: "floorplan.drive.clientId",
       fileId: "floorplan.drive.fileId",
       connected: "floorplan.drive.connected",
       auto: "floorplan.drive.auto",
       lastRev: "floorplan.drive.lastRev",
-      apiKey: "floorplan.drive.apiKey",
       sharedFile: "floorplan.drive.sharedFile",
     };
 
     let clientId = localStorage.getItem(LS.clientId) || DEFAULT_CLIENT_ID;
-    // The Picker API key is baked in and managed behind the scenes. Older builds
-    // let the user enter their own key, stored under LS.apiKey; that stored value
-    // would override the baked-in key and, if stale/invalid, make the Picker fail
-    // with "The API developer key is invalid". So always use DEFAULT_API_KEY and
-    // purge any leftover stored key.
-    try { localStorage.removeItem(LS.apiKey); } catch (_) {}
-    let apiKey = DEFAULT_API_KEY;
+    // Clean up the now-unused API key some browsers still have stored.
+    try { localStorage.removeItem("floorplan.drive.apiKey"); } catch (_) {}
 
     // Stable per-device id + editable label, written into the file so every
     // client can show who last wrote and when.
@@ -2401,6 +2395,10 @@
     // "local" works only on this device. Defaults to local so nothing pushes to
     // Drive until the user opts in.
     let sessionMode = "local";
+    // Set once a write to the pinned shared file is rejected (403) because the
+    // user only has read access. We then stop trying to push automatically and
+    // explain that edits stay on this device; a manual Sync re-tests access.
+    let sharedReadOnly = false;
 
     const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (_) {} };
     function setLastSeenRev(r) { lastSeenRev = Math.max(lastSeenRev, +r || 0); lsSet(LS.lastRev, String(lastSeenRev)); markSaved(); }
@@ -2567,6 +2565,7 @@
     // mode: "auto" | "firstConnect" | "forceUp" | "forceDown"
     async function syncNow(interactive, mode) {
       if (!connected || busy) return;
+      if (interactive) sharedReadOnly = false; // an explicit Sync/Force re-tests write access
       sessionMode = "drive"; // any sync means we're working against Drive
       busy = true;
       setStatus("Syncing…");
@@ -2687,7 +2686,19 @@
       const push = async (label) => {
         doc.writers = mergeWriters(remote && remote.writers, doc.writers);
         stampWriter();
-        await updateFile(sharedFileId, serialize());
+        try {
+          await updateFile(sharedFileId, serialize());
+        } catch (e) {
+          if (/Drive API 403/.test(e.message)) {
+            // The user can read this shared file but not write it.
+            sharedReadOnly = true;
+            setStatus("Read-only access — your changes are kept on this device but can't be saved to the shared plan.", "err");
+            pill();
+            return;
+          }
+          throw e;
+        }
+        sharedReadOnly = false;
         setLastSeenRev(+doc.rev || 0);
         try { localStorage.setItem(STORAGE_KEY, serialize()); } catch (_) {}
         setStatus(label + " · " + timeNow());
@@ -2702,7 +2713,10 @@
       } else if (remote && remoteRev > localRev) {
         await pull("Updated from shared plan");
       } else if (localRev > remoteRev) {
-        await push("Saved to shared plan");
+        // Known read-only: don't hammer Drive with doomed writes on every edit;
+        // just remind the user. A manual Sync clears the flag and re-tests.
+        if (sharedReadOnly) setStatus("Read-only — local changes stay on this device only.", "err");
+        else await push("Saved to shared plan");
       } else {
         setLastSeenRev(remoteRev);
         setStatus("Shared plan up to date · " + timeNow());
@@ -2896,7 +2910,10 @@
               .addView(mine)
               .addView(shared)
               .setCallback(pickerCallback);
-            if (apiKey) builder.setDeveloperKey(apiKey);
+            // No setDeveloperKey: for an OAuth-token drive.file picker the API key
+            // is optional, and a key whose project restrictions Google dislikes is
+            // exactly what triggers "The API developer key is invalid". The OAuth
+            // token + appId are sufficient to open files the user picks.
             builder.build().setVisible(true);
           });
         })
@@ -2908,6 +2925,7 @@
       const f = data.docs && data.docs[0];
       if (!f) return;
       sharedFileId = f.id;
+      sharedReadOnly = false;
       lsSet(LS.sharedFile, sharedFileId);
       connected = true; lsSet(LS.connected, "1");
       updateUI();
@@ -2915,6 +2933,7 @@
     }
     function leaveShared() {
       sharedFileId = "";
+      sharedReadOnly = false;
       lsSet(LS.sharedFile, "");
       updateUI();
       setStatus("Back to your own plan. Sync to load it.");
