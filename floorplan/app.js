@@ -302,6 +302,11 @@
     return corners.map((c) => `${c[0].toFixed(1)},${c[1].toFixed(1)}`).join(" ");
   }
 
+  // Rough on-screen width (px) of a label, used to declutter when zoomed out.
+  function textWidthPx(str, size) {
+    return str.length * size * 0.58;
+  }
+
   function drawRoom(room) {
     const sel = selection && selection.kind === "room" && selection.roomId === room.id;
     const geo = itemGeometry(room, room, 0);
@@ -318,9 +323,12 @@
       })
     );
 
-    // Room name (top-left, inside)
-    const [nx, ny] = geo.corners[0];
-    g.appendChild(textLabel(nx + 8, ny + 20, room.name, { weight: 700, size: 15, fill: "#1f2933" }));
+    // Room name (top-left, inside) — only when the room is big enough on
+    // screen to hold it, so it doesn't spill out of small/zoomed-out rooms.
+    if (room.w * view.scale > textWidthPx(room.name, 15) + 14 && room.h * view.scale > 26) {
+      const [nx, ny] = geo.corners[0];
+      g.appendChild(textLabel(nx + 8, ny + 20, room.name, { weight: 700, size: 15, fill: "#1f2933" }));
+    }
 
     drawEdgeLabels(g, geo, room, room.id, null);
     if (sel) drawHandles(g, geo);
@@ -352,11 +360,13 @@
       })
     );
 
-    g.appendChild(
-      textLabel(geo.center[0], geo.center[1] + 4, obj.name, {
-        weight: 600, size: 13, fill: "#1f2933", anchor: "middle",
-      })
-    );
+    if (obj.w * view.scale > textWidthPx(obj.name, 13) + 8 && obj.h * view.scale > 18) {
+      g.appendChild(
+        textLabel(geo.center[0], geo.center[1] + 4, obj.name, {
+          weight: 600, size: 13, fill: "#1f2933", anchor: "middle",
+        })
+      );
+    }
 
     drawEdgeLabels(g, geo, obj, room.id, obj.id);
     if (sel) drawHandles(g, geo);
@@ -385,6 +395,9 @@
       const [lx, ly] = e.labelScreen;
       const txt = `${round(e.len)} cm`;
       const wpx = txt.length * 6.6 + 8;
+      // Declutter: skip an edge whose on-screen length can't hold its own label
+      // (this is what overlaps/crowds when zoomed out).
+      if (e.len * view.scale < wpx) continue;
       const eg = svgEl("g", {
         class: "edge-label",
         "data-kind": "edge",

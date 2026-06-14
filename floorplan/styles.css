@@ -159,6 +159,7 @@ button.danger:hover:not(:disabled) {
   background: var(--panel-bg);
   border-left: 1px solid var(--line);
   overflow-y: auto;
+  overflow-x: hidden; /* never scroll the form sideways */
   padding: 14px;
 }
 .panel-section h2 {
@@ -238,6 +239,9 @@ kbd {
   background: #fff;
   color: var(--ink);
   min-height: 38px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 .field input:focus,
 .field select:focus {
@@ -254,6 +258,7 @@ kbd {
 }
 .field-row .field {
   flex: 1;
+  min-width: 0; /* allow inputs to shrink instead of overflowing on narrow screens */
 }
 
 .wall-buttons {
@@ -294,7 +299,9 @@ kbd {
 }
 .wall-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* minmax(0, …) lets columns shrink below their content's intrinsic width,
+     so number/select fields reflow instead of overflowing the panel. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
 }
 .wall-grid label {
@@ -303,6 +310,7 @@ kbd {
   gap: 2px;
   font-size: 11px;
   color: var(--muted);
+  min-width: 0;
 }
 .wall-grid input,
 .wall-grid select {
@@ -312,6 +320,9 @@ kbd {
   border: 1px solid var(--line);
   border-radius: 6px;
   min-height: 32px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 .wall-buttons.nested {
   margin: 8px 0 0;
