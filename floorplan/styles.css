@@ -470,6 +470,7 @@ kbd {
   cursor: pointer;
 }
 .welcome-choice strong { font-size: 15px; }
+.dir-tag { font-weight: 600; color: var(--accent); }
 .welcome-choice:hover {
   border-color: var(--accent);
   background: var(--accent-soft);
