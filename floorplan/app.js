@@ -407,12 +407,13 @@
   // several rows so a cut-in intruding into the *top* of the text still pushes
   // it right or down. Drops to a lower band when squeezed, contracting to two
   // characters before giving up.
-  function roomLabelPlacement(corners, name) {
+  function roomLabelPlacement(corners, name, objRects) {
     const ys = corners.map((p) => p[1]);
     const minY = Math.min(...ys), maxY = Math.max(...ys);
     if (maxY - minY < 24) return null;
     const pad = 6;
-    for (const dy of [21, 44, 67]) {
+    let fallback = null;
+    for (const dy of [21, 44, 67, 90, 113]) {
       const baseline = minY + dy;
       if (baseline > maxY - 3) break;
       let L = -Infinity, R = Infinity, ok = true;
@@ -424,9 +425,20 @@
       }
       if (!ok || R - L < 14) continue;
       const text = fitLabel(name, R - L - pad * 2, 15, 700, 2);
-      if (text) return { x: L + pad, y: baseline, text };
+      if (!text) continue;
+      const place = { x: L + pad, y: baseline, text };
+      // Remember the first band that fits so the name always shows somewhere,
+      // but prefer a band that doesn't sit on top of a room object.
+      if (!fallback) fallback = place;
+      if (objRects && objRects.length) {
+        const tw = measureText(text, 15, 700);
+        const rect = { x0: L + pad, x1: L + pad + tw, y0: baseline - 13, y1: baseline + 4 };
+        const hit = objRects.some((o) => rect.x0 < o.x1 && rect.x1 > o.x0 && rect.y0 < o.y1 && rect.y1 > o.y0);
+        if (hit) continue;
+      }
+      return place;
     }
-    return null;
+    return fallback;
   }
 
   // Resolve where each opening sits along a wall (cm from the wall's start
@@ -617,8 +629,14 @@
       })
     );
 
-    // Room name — tucked into the top-left interior, cut-out/zoom aware.
-    const place = roomLabelPlacement(geo.corners, room.name);
+    // Room name — tucked into the top-left interior, cut-out/zoom aware, and
+    // nudged to a lower band when it would land on top of a room object.
+    const objRects = (room.objects || []).map((o) => {
+      const c = itemGeometry(room, o, o.rot || 0).corners;
+      const xs = c.map((p) => p[0]), oys = c.map((p) => p[1]);
+      return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...oys), y1: Math.max(...oys) };
+    });
+    const place = roomLabelPlacement(geo.corners, room.name, objRects);
     if (place) {
       g.appendChild(textLabel(place.x, place.y, place.text, { weight: 700, size: 15, fill: "#1f2933" }));
     }
@@ -798,13 +816,30 @@
     const rot0 = obj.rot || 0;
     const wPx = ((rot0 === 90 || rot0 === 270 ? obj.h : obj.w) * view.scale);
     const hPx = ((rot0 === 90 || rot0 === 270 ? obj.w : obj.h) * view.scale);
-    const size = 13, weight = 600;
-    const fitsHoriz = measureText(obj.name, size, weight) <= wPx - 8;
-    const vertical = !fitsHoriz && hPx > wPx;
-    const lines = wrapLabel(obj.name, (vertical ? hPx : wPx) - 8, (vertical ? wPx : hPx) - 4, size, weight);
-    if (!lines) return;
+    const weight = 600;
+    // Word-wrap and, if needed, rotate the name to read bottom-to-top. If it
+    // still won't fit, step the font down to a readable floor (9px) rather than
+    // hide the name — a small full name beats no name. Prefer the largest size
+    // that shows the whole name; otherwise the smallest readable size.
+    const layoutAt = (size) => {
+      const fitsHoriz = measureText(obj.name, size, weight) <= wPx - 8;
+      const vertical = !fitsHoriz && hPx > wPx;
+      const lines = wrapLabel(obj.name, (vertical ? hPx : wPx) - 8, (vertical ? wPx : hPx) - 4, size, weight);
+      if (!lines) return null;
+      return { size, vertical, lines, clipped: lines.some((l) => l.includes("…")) };
+    };
+    let chosen = null, smallest = null;
+    for (const s of [13, 12, 11, 10, 9]) {
+      const lay = layoutAt(s);
+      if (!lay) continue;
+      smallest = lay;
+      if (!lay.clipped) { chosen = lay; break; }
+    }
+    const pick = chosen || smallest;
+    if (!pick) return;
+    const { size, vertical, lines } = pick;
     const lineH = size * 1.2;
-    const startY = center[1] - ((lines.length - 1) * lineH) / 2 + 4.5;
+    const startY = center[1] - ((lines.length - 1) * lineH) / 2 + size * 0.35;
     const attrs = {
       "text-anchor": "middle", "font-size": size, "font-weight": weight, fill: "#1f2933",
       "font-family": "system-ui, sans-serif", style: "pointer-events:none; user-select:none",
