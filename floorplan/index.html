@@ -61,9 +61,9 @@
       </div>
 
       <div class="toolbar-group">
-        <label class="check"><input type="checkbox" id="chk-edges" checked /> Edge lengths</label>
-        <label class="check"><input type="checkbox" id="chk-grid" checked /> Grid</label>
-        <label class="check"><input type="checkbox" id="chk-snap" checked /> Snap</label>
+        <label class="check"><input type="checkbox" id="chk-edges" autocomplete="off" checked /> Edge lengths</label>
+        <label class="check"><input type="checkbox" id="chk-grid" autocomplete="off" checked /> Grid</label>
+        <label class="check"><input type="checkbox" id="chk-snap" autocomplete="off" checked /> Snap</label>
       </div>
 
       <div class="toolbar-group right">
@@ -218,8 +218,8 @@
 
         <div class="drive-row">
           <button id="drive-connect">Connect Google Drive</button>
+          <button id="drive-syncnow" class="primary" hidden>Sync now</button>
           <button id="drive-disconnect" hidden>Disconnect</button>
-          <button id="drive-syncnow" hidden>Sync now</button>
         </div>
 
         <div class="drive-row" id="drive-force-row" hidden>
