@@ -67,8 +67,11 @@
       <div id="canvas-wrap" class="canvas-wrap">
         <svg id="canvas" xmlns="http://www.w3.org/2000/svg"></svg>
         <div id="hint" class="hint">
-          Drag the background to pan · scroll to zoom · drag rooms/objects to move them ·
-          click any edge length to edit it · tap a selected item again (or Done ✕) to deselect
+          <span>
+            Drag the background to pan · scroll to zoom · drag rooms/objects to move them ·
+            click any edge length to edit it · tap a selected item again (or Done ✕) to deselect
+          </span>
+          <button id="hint-close" type="button" title="Dismiss" aria-label="Dismiss">✕</button>
         </div>
       </div>
 
@@ -85,6 +88,7 @@
             <li>Keys: <kbd>R</kbd> rotate · <kbd>Del</kbd> delete · <kbd>Ctrl/⌘+D</kbd> duplicate · <kbd>arrows</kbd> nudge.</li>
             <li>Everything is auto-saved in this browser. Use Export to keep a copy.</li>
           </ul>
+          <p class="small"><a href="privacy.html" target="_blank" rel="noopener">Privacy policy</a></p>
         </div>
 
         <div id="panel-details" class="panel-section" hidden>
@@ -165,6 +169,28 @@
       </aside>
     </main>
 
+    <div id="welcome-modal" class="modal" hidden>
+      <div class="modal-card">
+        <h2>▢ Floor Plan Designer</h2>
+        <p class="muted small">
+          Sketch room layouts right in your browser. Where would you like to keep your plans?
+        </p>
+        <div class="welcome-choices">
+          <button id="welcome-drive" class="welcome-choice">
+            <strong>☁ Use Google Drive</strong>
+            <span class="muted small">Sync across your devices. Uses the least-privilege <code>drive.file</code> scope — the app only ever touches its own plan file.</span>
+          </button>
+          <button id="welcome-local" class="welcome-choice">
+            <strong>▢ Work on this device</strong>
+            <span class="muted small">Everything stays in this browser. You can connect Drive later from the toolbar.</span>
+          </button>
+        </div>
+        <p class="muted small">
+          By continuing you agree to the <a href="privacy.html" target="_blank" rel="noopener">privacy policy</a>.
+        </p>
+      </div>
+    </div>
+
     <div id="drive-modal" class="modal" hidden>
       <div class="modal-card">
         <button class="modal-close" id="drive-close" title="Close">×</button>
@@ -192,8 +218,10 @@
           Drive's copy down, regardless of which looks newer.
         </p>
         <p id="drive-status" class="drive-status"></p>
+        <p class="muted small"><a href="privacy.html" target="_blank" rel="noopener">Privacy policy</a></p>
       </div>
     </div>
+
 
     <!-- Google Identity Services (for Drive OAuth). Loads only when online. -->
     <script src="https://accounts.google.com/gsi/client" async></script>

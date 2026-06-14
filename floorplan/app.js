@@ -1785,6 +1785,10 @@
     let tokenClient = null;
     let busy = false;
     let timer = null;
+    // Chosen each load via the first-load prompt: "drive" syncs this session,
+    // "local" works only on this device. Defaults to local so nothing pushes to
+    // Drive until the user opts in.
+    let sessionMode = "local";
 
     const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (_) {} };
     function setLastSeenRev(r) { lastSeenRev = Math.max(lastSeenRev, +r || 0); lsSet(LS.lastRev, String(lastSeenRev)); }
@@ -1904,6 +1908,7 @@
     // mode: "auto" | "firstConnect" | "forceUp" | "forceDown"
     async function syncNow(interactive, mode) {
       if (!connected || busy) return;
+      sessionMode = "drive"; // any sync means we're working against Drive
       busy = true;
       setStatus("Syncing…");
       try {
@@ -1992,9 +1997,24 @@
     }
 
     function scheduleSync() {
-      if (!connected || !auto) return;
+      if (sessionMode !== "drive" || !connected || !auto) return;
       clearTimeout(timer);
       timer = setTimeout(() => syncNow(false, "auto"), 2500);
+    }
+
+    // First-load choices. "Work locally" keeps everything on this device this
+    // session; "Use Drive" pulls the latest (or opens the connect dialog).
+    function useLocal() {
+      sessionMode = "local";
+      setStatus("Working on this device.");
+    }
+    function useDrive() {
+      sessionMode = "drive";
+      if (!clientId || !connected) { open(); return; }
+      waitForGis((ok) => {
+        if (!ok) { open(); return; }
+        getToken(false).then(() => syncNow(false, "welcome")).catch(() => open());
+      });
     }
 
     async function connect() {
@@ -2055,17 +2075,11 @@
     function boot() {
       bindEvents();
       updateUI();
-      // If previously connected with auto-sync on, silently pull the latest once
-      // the library loads. With auto-sync off we leave it to manual Sync/Force.
-      if (connected && clientId && auto) {
-        waitForGis((ok) => {
-          if (!ok) { setStatus("Google library unavailable (offline?).", "err"); return; }
-          getToken(false).then(() => syncNow(false, "auto")).catch(() => setStatus("Sign-in expired — open Drive and reconnect.", "err"));
-        });
-      }
+      // Loading from Drive is now driven by the first-load prompt (useDrive),
+      // so the user consciously chooses Drive vs local on every load.
     }
 
-    return { scheduleSync, boot, nextRev };
+    return { scheduleSync, boot, nextRev, open, useLocal, useDrive };
   })();
 
   // ---------------------------------------------------------------------------
@@ -2141,6 +2155,18 @@
   el("btn-layout-rename").addEventListener("click", renameLayout);
   el("btn-layout-delete").addEventListener("click", deleteLayout);
 
+  // Dismissable canvas hint (stays dismissed on this device).
+  (function hint() {
+    const KEY = "floorplan.hintDismissed";
+    const node = el("hint");
+    if (!node) return;
+    if (localStorage.getItem(KEY)) { node.classList.add("dismissed"); return; }
+    el("hint-close").addEventListener("click", () => {
+      node.classList.add("dismissed");
+      try { localStorage.setItem(KEY, "1"); } catch (_) {}
+    });
+  })();
+
   window.addEventListener("resize", render);
   // Re-render whenever the canvas area itself resizes — e.g. the bottom panel
   // collapsing on mobile grows the canvas, and the grid must fill the new space
@@ -2171,4 +2197,14 @@
   refreshPanel();
   fitView();
   DRIVE.boot();
+
+  // Shown on EVERY load: a deliberate choice of which state to work on —
+  // sync with Google Drive, or work locally on this device.
+  (function welcome() {
+    const modal = el("welcome-modal");
+    const close = () => { modal.hidden = true; };
+    el("welcome-local").addEventListener("click", () => { DRIVE.useLocal(); close(); });
+    el("welcome-drive").addEventListener("click", () => { close(); DRIVE.useDrive(); });
+    modal.hidden = false;
+  })();
 })();

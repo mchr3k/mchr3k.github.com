@@ -155,15 +155,34 @@ button.danger:hover:not(:disabled) {
   left: 50%;
   bottom: 10px;
   transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
   background: rgba(31, 41, 51, 0.78);
   color: #fff;
   font-size: 12px;
-  padding: 6px 12px;
+  padding: 6px 8px 6px 12px;
   border-radius: 20px;
-  pointer-events: none;
+  pointer-events: none; /* let canvas gestures pass through the bubble */
   max-width: 92%;
   text-align: center;
 }
+.hint button {
+  pointer-events: auto; /* …but the dismiss button stays clickable */
+  flex: none;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  border: none;
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  line-height: 1;
+  font-size: 11px;
+  padding: 0;
+  cursor: pointer;
+}
+.hint button:hover { background: rgba(255, 255, 255, 0.32); }
+.hint.dismissed { display: none; }
 
 /* ---------- Panel ---------- */
 .panel {
@@ -431,6 +450,29 @@ kbd {
   gap: 8px;
   flex-wrap: wrap;
   margin: 4px 0 12px;
+}
+.welcome-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 14px 0;
+}
+.welcome-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+  text-align: left;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+}
+.welcome-choice strong { font-size: 15px; }
+.welcome-choice:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 .drive-row button {
   flex: 1;
