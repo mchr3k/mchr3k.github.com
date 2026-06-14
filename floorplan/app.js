@@ -684,27 +684,39 @@
   }
 
   // While dragging an object, show the clear distance from each of its sides to
-  // the room wall in that direction — following the actual outline, so cut-ins
-  // read closer and cut-outs read further.
+  // the nearest obstacle on that side — whichever comes first within the side's
+  // projected band: another object, or the room wall (following the outline, so
+  // cut-ins read closer and cut-outs further).
   function drawObjectClearances(g, room, obj) {
-    const poly = itemLocalGeometry(room).points; // room outline, local cm
-    const rot = obj.rot || 0;
-    const cx = obj.x + obj.w / 2, cy = obj.y + obj.h / 2;
-    const base = [[obj.x, obj.y], [obj.x + obj.w, obj.y], [obj.x + obj.w, obj.y + obj.h], [obj.x, obj.y + obj.h]];
-    const corners = rot ? base.map(([px, py]) => rotatePoint(px, py, cx, cy, rot)) : base;
-    const left = Math.min(...corners.map((c) => c[0])), right = Math.max(...corners.map((c) => c[0]));
-    const top = Math.min(...corners.map((c) => c[1])), bottom = Math.max(...corners.map((c) => c[1]));
-    const mx = (left + right) / 2, my = (top + bottom) / 2;
-    const hx = polyCrossingsX(poly, my), vy = polyCrossingsY(poly, mx);
-    const lX = Math.max(-Infinity, ...hx.filter((x) => x <= left + 0.01));
-    const rX = Math.min(Infinity, ...hx.filter((x) => x >= right - 0.01));
-    const tY = Math.max(-Infinity, ...vy.filter((y) => y <= top + 0.01));
-    const bY = Math.min(Infinity, ...vy.filter((y) => y >= bottom - 0.01));
+    const poly = itemLocalGeometry(room).points;
+    const a = objAABBAt(obj, obj.x, obj.y);
+    const others = room.objects.filter((o) => o.id !== obj.id).map((o) => objAABBAt(o, o.x, o.y));
     const at = (lx, ly) => worldToScreen(room.x + lx, room.y + ly);
-    if (isFinite(lX)) drawClearLabel(g, at((lX + left) / 2, my), Math.round(left - lX));
-    if (isFinite(rX)) drawClearLabel(g, at((right + rX) / 2, my), Math.round(rX - right));
-    if (isFinite(tY)) drawClearLabel(g, at(mx, (tY + top) / 2), Math.round(top - tY));
-    if (isFinite(bY)) drawClearLabel(g, at(mx, (bottom + bY) / 2), Math.round(bY - bottom));
+    const cxm = (a.left + a.right) / 2, cym = (a.top + a.bottom) / 2;
+    const band = (lo, hi) => [0, 0.25, 0.5, 0.75, 1].map((k) => lo + (hi - lo) * k);
+    const overlapY = (o) => o.top < a.bottom - 0.5 && o.bottom > a.top + 0.5;
+    const overlapX = (o) => o.left < a.right - 0.5 && o.right > a.left + 0.5;
+
+    // right
+    let e = Infinity;
+    for (const y of band(a.top, a.bottom)) { const xs = polyCrossingsX(poly, y).filter((x) => x > a.right + 0.01); if (xs.length) e = Math.min(e, ...xs); }
+    for (const o of others) if (overlapY(o) && o.left >= a.right - 0.01) e = Math.min(e, o.left);
+    if (isFinite(e)) drawClearLabel(g, at((a.right + e) / 2, cym), Math.round(e - a.right));
+    // left
+    e = -Infinity;
+    for (const y of band(a.top, a.bottom)) { const xs = polyCrossingsX(poly, y).filter((x) => x < a.left - 0.01); if (xs.length) e = Math.max(e, ...xs); }
+    for (const o of others) if (overlapY(o) && o.right <= a.left + 0.01) e = Math.max(e, o.right);
+    if (isFinite(e)) drawClearLabel(g, at((a.left + e) / 2, cym), Math.round(a.left - e));
+    // bottom
+    e = Infinity;
+    for (const x of band(a.left, a.right)) { const ys = polyCrossingsY(poly, x).filter((y) => y > a.bottom + 0.01); if (ys.length) e = Math.min(e, ...ys); }
+    for (const o of others) if (overlapX(o) && o.top >= a.bottom - 0.01) e = Math.min(e, o.top);
+    if (isFinite(e)) drawClearLabel(g, at(cxm, (a.bottom + e) / 2), Math.round(e - a.bottom));
+    // top
+    e = -Infinity;
+    for (const x of band(a.left, a.right)) { const ys = polyCrossingsY(poly, x).filter((y) => y < a.top - 0.01); if (ys.length) e = Math.max(e, ...ys); }
+    for (const o of others) if (overlapX(o) && o.bottom <= a.top + 0.01) e = Math.max(e, o.bottom);
+    if (isFinite(e)) drawClearLabel(g, at(cxm, (a.top + e) / 2), Math.round(a.top - e));
   }
 
   function drawClearLabel(g, pt, cm) {
@@ -730,6 +742,9 @@
   function snapObjectEdges(room, obj, nx, ny) {
     const thr = 7 / view.scale;
     const xT = [0, room.w], yT = [0, room.h];
+    // Every room-outline coordinate is a snap target, so objects align to walls
+    // and cut-in/out edges, not just the base rectangle.
+    for (const [px, py] of itemLocalGeometry(room).points) { xT.push(px); yT.push(py); }
     for (const o of room.objects) {
       if (o.id === obj.id) continue;
       const a = objAABBAt(o, o.x, o.y);
