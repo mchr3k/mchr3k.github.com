@@ -236,8 +236,8 @@
         </p>
 
         <label class="field drive-name-field">
-          <span>This device's name (shown to collaborators)</span>
-          <input type="text" id="drive-clientname" maxlength="40" placeholder="e.g. Martin's laptop" />
+          <span>This device's name (auto-detected — edit to override)</span>
+          <input type="text" id="drive-clientname" maxlength="40" />
         </label>
         <div id="drive-writers" class="drive-writers" hidden></div>
 
@@ -249,15 +249,17 @@
     <div id="direction-modal" class="modal" hidden>
       <div class="modal-card">
         <h2 id="direction-title">Working with Google Drive</h2>
-        <p class="muted small">This device has its own plan. Which version do you want to keep?</p>
+        <p class="muted small">This device and the saved copy differ. Which do you want to keep?</p>
         <div class="welcome-choices">
           <button id="direction-upload" class="welcome-choice">
             <strong>↑ Keep this device's plan</strong>
-            <span class="muted small">Upload your current plan, overwriting what's there.</span>
+            <span class="muted small" id="direction-local"></span>
+            <span class="muted small">Uploads it, overwriting the saved copy.</span>
           </button>
           <button id="direction-load" class="welcome-choice">
-            <strong>↓ Load the saved plan</strong>
-            <span class="muted small">Load it and discard this device's current changes.</span>
+            <strong>↓ Load the saved copy</strong>
+            <span class="muted small" id="direction-remote"></span>
+            <span class="muted small">Discards this device's current changes.</span>
           </button>
         </div>
         <div class="drive-row">
