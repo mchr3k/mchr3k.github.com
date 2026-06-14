@@ -2457,8 +2457,13 @@
       catch (e) { setStatus("Sync error: " + e.message, "err"); return; }
       if (!remote) return syncNow(false, "forceUp"); // nothing there yet — just upload
 
+      // Compare *normalised* content on both sides. The local doc is always
+      // normalised; normalising the remote too means a file written by an older
+      // app version (missing newer fields) still counts as "in sync" instead of
+      // looping the dialog forever.
+      const nr = normalize(remote);
       const localContent = JSON.stringify({ activeId: doc.activeId, layouts: doc.layouts });
-      const remoteContent = JSON.stringify({ activeId: remote.activeId, layouts: remote.layouts });
+      const remoteContent = JSON.stringify({ activeId: nr.activeId, layouts: nr.layouts });
       if (localContent === remoteContent) {
         setLastSeenRev(+remote.rev || 0);
         setStatus("Already in sync · " + timeNow());
