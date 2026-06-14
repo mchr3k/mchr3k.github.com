@@ -272,6 +272,7 @@
       placeEdgeLabels(layer);
       svg.appendChild(layer);
     }
+    updateZoomSelect();
   }
 
   function drawGrid(W, H) {
@@ -1654,12 +1655,29 @@
   }
 
   function zoomBy(factor) {
+    zoomTo(view.scale * factor);
+  }
+  // Set an absolute zoom (px per cm), keeping the canvas centre stable.
+  function zoomTo(scale) {
     const [mx, my] = [wrap.clientWidth / 2, wrap.clientHeight / 2];
     const [wx, wy] = screenToWorld(mx, my);
-    view.scale = clamp(view.scale * factor, 0.05, 6);
+    view.scale = clamp(scale, 0.05, 6);
     view.ox = mx - wx * view.scale;
     view.oy = my - wy * view.scale;
     render();
+  }
+
+  const ZOOM_PRESETS = [25, 50, 75, 100, 150, 200, 400];
+  // Reflect the current zoom in the toolbar dropdown (a live "73%" option when
+  // it's not on a preset).
+  function updateZoomSelect() {
+    const sel = el("zoom-select");
+    if (!sel) return;
+    const pct = Math.round(view.scale * 100);
+    const cur = sel.querySelector('option[value="__current"]');
+    if (cur) cur.textContent = pct + "%";
+    const preset = ZOOM_PRESETS.find((p) => Math.abs(p - pct) < 0.5);
+    sel.value = preset != null ? String(preset) : "__current";
   }
 
   // ---------------------------------------------------------------------------
@@ -2637,6 +2655,12 @@
   el("btn-zoom-in").addEventListener("click", () => zoomBy(1.2));
   el("btn-zoom-out").addEventListener("click", () => zoomBy(1 / 1.2));
   el("btn-zoom-reset").addEventListener("click", fitView);
+  el("zoom-select").addEventListener("change", (e) => {
+    const v = e.target.value;
+    if (v === "fit") fitView();
+    else if (v !== "__current") zoomTo(+v / 100);
+    e.target.blur();
+  });
   el("chk-edges").addEventListener("change", (e) => { ui.edges = e.target.checked; render(); });
   el("chk-grid").addEventListener("change", (e) => { ui.grid = e.target.checked; render(); });
   el("chk-snap").addEventListener("change", (e) => { ui.snap = e.target.checked; });
