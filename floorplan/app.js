@@ -700,18 +700,20 @@
     const objId = target.getAttribute("data-obj");
     const [gmx, gmy] = mousePos(e);
 
+    // Editing an edge length is a deliberate tap on a number, not an accidental
+    // drag — so it's always available, even when the canvas is locked.
+    if (kind === "edge") {
+      openEdgeEditor(target, e);
+      return;
+    }
+
     if (locked) {
       // View/select only: open the item in the side panel for editing, but
-      // never move it or open the canvas edge editor — a drag pans instead.
+      // never move it — a drag pans instead.
       const sel = objId ? { kind: "object", roomId, objId } : { kind: "room", roomId };
       const wasSelected = roomId ? sameSel(selection, sel) : false;
       if (roomId) select(sel);
       drag = { type: "pan", startOx: view.ox, startOy: view.oy, startMx: gmx, startMy: gmy, lockSel: roomId ? sel : null, wasSelected, moved: false };
-      return;
-    }
-
-    if (kind === "edge") {
-      openEdgeEditor(target, e);
       return;
     }
 
@@ -1505,6 +1507,8 @@
         activeId: doc.activeId,
         view,
         layouts: doc.layouts,
+        // Per-client last-write log so every device can show who last wrote.
+        writers: doc.writers && typeof doc.writers === "object" ? doc.writers : {},
       },
       null,
       2
@@ -1608,8 +1612,9 @@
       layouts = [{ id: uid("l"), name: "Layout 1", rooms: (data.rooms || []).map(normalizeRoom) }];
     }
     const activeId = layouts.some((l) => l.id === data.activeId) ? data.activeId : layouts[0].id;
+    const writers = data.writers && typeof data.writers === "object" ? data.writers : {};
     // Missing rev/updatedAt stay 0 so an untouched copy can't outrank real data.
-    return { version: SCHEMA_VERSION, rev: +data.rev || 0, updatedAt: +data.updatedAt || 0, activeId, layouts };
+    return { version: SCHEMA_VERSION, rev: +data.rev || 0, updatedAt: +data.updatedAt || 0, activeId, layouts, writers };
   }
 
   // Replace the whole document with one pulled from Drive, without bumping the
@@ -1767,15 +1772,52 @@
     // authorised-origins allowlist are what protect it. Forks can override it via
     // the in-app field, which is stored in localStorage and takes precedence.
     const DEFAULT_CLIENT_ID = "570993263806-e6ga4lb5137114grenq6ucjtmq159o4q.apps.googleusercontent.com";
+    // Baked-in default Google API key, used only by the Picker (for opening a
+    // shared plan). Like the Client ID it is not a secret, but you should
+    // restrict it (Picker API + your site's HTTP referrers) in the Cloud Console.
+    // Leave "" to fall back to the per-device key the user is prompted for.
+    const DEFAULT_API_KEY = "AIzaSyCz_xdMDpKvj1Q97ICObW4OF0Dcm4MvNPI";
     const LS = {
       clientId: "floorplan.drive.clientId",
       fileId: "floorplan.drive.fileId",
       connected: "floorplan.drive.connected",
       auto: "floorplan.drive.auto",
       lastRev: "floorplan.drive.lastRev",
+      apiKey: "floorplan.drive.apiKey",
+      sharedFile: "floorplan.drive.sharedFile",
     };
 
     let clientId = localStorage.getItem(LS.clientId) || DEFAULT_CLIENT_ID;
+    let apiKey = localStorage.getItem(LS.apiKey) || DEFAULT_API_KEY;
+
+    // Stable per-device id + editable label, written into the file so every
+    // client can show who last wrote and when.
+    const CLIENT_ID = (() => {
+      let id = localStorage.getItem("floorplan.clientId");
+      if (!id) { id = uid("c"); try { localStorage.setItem("floorplan.clientId", id); } catch (_) {} }
+      return id;
+    })();
+    let clientName = localStorage.getItem("floorplan.clientName") || "";
+    const clientLabel = () => clientName || "Device " + CLIENT_ID.slice(-4);
+    function stampWriter() {
+      if (!doc.writers || typeof doc.writers !== "object") doc.writers = {};
+      doc.writers[CLIENT_ID] = { name: clientLabel(), at: Date.now(), rev: +doc.rev || 0 };
+    }
+    function mergeWriters(a, b) {
+      const out = {};
+      for (const src of [a, b]) {
+        if (src && typeof src === "object") {
+          for (const k in src) {
+            const e = src[k];
+            if (e && (!out[k] || (e.at || 0) > (out[k].at || 0))) out[k] = e;
+          }
+        }
+      }
+      return out;
+    }
+    // When set, we sync against this specific (typically link-shared) file the
+    // user picked with the Google Picker, instead of their own floorplan.json.
+    let sharedFileId = localStorage.getItem(LS.sharedFile) || "";
     let fileId = localStorage.getItem(LS.fileId) || "";
     let connected = localStorage.getItem(LS.connected) === "1";
     let auto = localStorage.getItem(LS.auto) !== "0";
@@ -1785,6 +1827,10 @@
     let tokenClient = null;
     let busy = false;
     let timer = null;
+    // Chosen each load via the first-load prompt: "drive" syncs this session,
+    // "local" works only on this device. Defaults to local so nothing pushes to
+    // Drive until the user opts in.
+    let sessionMode = "local";
 
     const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (_) {} };
     function setLastSeenRev(r) { lastSeenRev = Math.max(lastSeenRev, +r || 0); lsSet(LS.lastRev, String(lastSeenRev)); }
@@ -1811,7 +1857,36 @@
       el("drive-disconnect").hidden = !connected;
       el("drive-syncnow").hidden = !connected;
       el("drive-force-row").hidden = !connected;
+      const pick = el("drive-pick");
+      if (pick) pick.hidden = !connected;
+      const sharedRow = el("drive-shared-row");
+      if (sharedRow) sharedRow.hidden = !sharedFileId;
+      const nameInput = el("drive-clientname");
+      if (nameInput && document.activeElement !== nameInput) nameInput.value = clientName;
+      renderWriters();
       pill();
+    }
+
+    // Show who last wrote to the file and when. Names come from other clients,
+    // so build with textContent (never innerHTML) to stay XSS-safe.
+    function renderWriters() {
+      const box = el("drive-writers");
+      if (!box) return;
+      const w = doc.writers && typeof doc.writers === "object" ? doc.writers : {};
+      const entries = Object.entries(w).filter(([, e]) => e && e.at).sort((a, b) => b[1].at - a[1].at);
+      box.replaceChildren();
+      if (!entries.length) { box.hidden = true; return; }
+      box.hidden = false;
+      const h = document.createElement("h3");
+      h.textContent = "Last edits";
+      box.appendChild(h);
+      for (const [id, e] of entries) {
+        const row = document.createElement("div");
+        row.className = "writer-row";
+        const who = (e.name ? String(e.name) : "Device") + (id === CLIENT_ID ? " (this device)" : "");
+        row.textContent = who + " · " + new Date(e.at).toLocaleString();
+        box.appendChild(row);
+      }
     }
 
     function gisReady() {
@@ -1904,14 +1979,20 @@
     // mode: "auto" | "firstConnect" | "forceUp" | "forceDown"
     async function syncNow(interactive, mode) {
       if (!connected || busy) return;
+      sessionMode = "drive"; // any sync means we're working against Drive
       busy = true;
       setStatus("Syncing…");
       try {
         await getToken(interactive);
+
+        // Pinned to a shared file -> sync only against that one file.
+        if (sharedFileId) { await syncSharedFile(mode); return; }
+
         const files = await listFiles();
 
         // No file yet -> create one from the local plan.
         if (files.length === 0) {
+          stampWriter();
           fileId = await createFile(serialize());
           lsSet(LS.fileId, fileId);
           setLastSeenRev(+doc.rev || 0);
@@ -1947,6 +2028,8 @@
           setStatus(label + note + " · " + timeNow());
         };
         const push = async (label) => {
+          doc.writers = mergeWriters(best && best.doc.writers, doc.writers);
+          stampWriter();
           await updateFile(canonical, serialize());
           setLastSeenRev(+doc.rev || 0);
           setStatus(label + note + " · " + timeNow());
@@ -1987,26 +2070,113 @@
       }
     }
 
+    // Sync against a single shared file (picked via the Google Picker), so
+    // multiple people with edit access to one Drive file collaborate on it.
+    // Same newest-wins (by rev) rules as the personal-file path.
+    async function syncSharedFile(mode) {
+      let remote = null;
+      try {
+        remote = JSON.parse(await downloadFile(sharedFileId));
+      } catch (e) {
+        if (/Drive API 404|Drive API 403/.test(e.message)) {
+          setStatus("Lost access to the shared plan. Pick it again.", "err");
+          sharedFileId = ""; lsSet(LS.sharedFile, "");
+          updateUI();
+          return;
+        }
+        throw e;
+      }
+      const localRev = +doc.rev || 0;
+      const remoteRev = remote ? +remote.rev || 0 : 0;
+      const pull = async (label) => {
+        applyRemoteDoc(normalize(remote));
+        setLastSeenRev(remoteRev);
+        setStatus(label + " · " + timeNow());
+      };
+      const push = async (label) => {
+        doc.writers = mergeWriters(remote && remote.writers, doc.writers);
+        stampWriter();
+        await updateFile(sharedFileId, serialize());
+        setLastSeenRev(+doc.rev || 0);
+        setStatus(label + " · " + timeNow());
+      };
+      if (mode === "forceDown") {
+        if (remote) await pull("Loaded shared plan");
+        else setStatus("Shared file is empty.");
+      } else if (mode === "forceUp") {
+        doc.rev = Math.max(localRev, remoteRev) + 1;
+        try { localStorage.setItem(STORAGE_KEY, serialize()); } catch (_) {}
+        await push("Uploaded to shared plan");
+      } else if (remote && remoteRev > localRev) {
+        await pull("Updated from shared plan");
+      } else if (localRev > remoteRev) {
+        await push("Saved to shared plan");
+      } else {
+        setLastSeenRev(remoteRev);
+        setStatus("Shared plan up to date · " + timeNow());
+      }
+      pill();
+    }
+
     function timeNow() {
       return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     }
 
     function scheduleSync() {
-      if (!connected || !auto) return;
+      if (sessionMode !== "drive" || !connected || !auto) return;
       clearTimeout(timer);
       timer = setTimeout(() => syncNow(false, "auto"), 2500);
     }
 
+    // First-load choices. "Work locally" keeps everything on this device this
+    // session; "Use Drive" pulls the latest (or opens the connect dialog).
+    function useLocal() {
+      sessionMode = "local";
+      setStatus("Working on this device.");
+    }
+    function useDrive() {
+      sessionMode = "drive";
+      // Leaving any shared-file pin: this path is the user's *personal* Drive.
+      if (sharedFileId) { sharedFileId = ""; lsSet(LS.sharedFile, ""); }
+      if (!clientId) { open(); return; }
+      if (!connected) { open(); connect(); return; }
+      waitForGis((ok) => {
+        if (!ok) { open(); return; }
+        getToken(false).then(() => connectChoice("Google Drive")).catch(() => { open(); connect(); });
+      });
+    }
+    function openShared() {
+      sessionMode = "drive";
+      open();
+      openPicker();
+    }
+
+    async function authenticate() {
+      if (!clientId) throw new Error("No OAuth Client ID configured");
+      if (!gisReady()) throw new Error("Google library not loaded — check your connection");
+      await getToken(true);
+      connected = true;
+      lsSet(LS.connected, "1");
+      updateUI();
+    }
+
+    // On connecting to a target (personal Drive or a shared file), make the
+    // direction explicit: upload this device's plan, or load the target and
+    // discard local changes.
+    function connectChoice(label) {
+      const up = confirm(
+        `Working with ${label}.\n\n` +
+          "OK — upload THIS device's current plan to it.\n" +
+          "Cancel — load it and discard this device's current changes."
+      );
+      return syncNow(false, up ? "forceUp" : "forceDown");
+    }
+
     async function connect() {
-      if (!clientId) { setStatus("No OAuth Client ID configured.", "err"); return; }
-      if (!gisReady()) { setStatus("Google library not loaded — check your connection.", "err"); return; }
       try {
         setStatus("Connecting…");
-        await getToken(true);
-        connected = true;
-        lsSet(LS.connected, "1");
-        updateUI();
-        await syncNow(true, "firstConnect");
+        await authenticate();
+        await connectChoice("Google Drive");
       } catch (e) {
         setStatus("Could not connect: " + e.message, "err");
       }
@@ -2021,6 +2191,65 @@
       lsSet(LS.connected, "0");
       updateUI();
       setStatus("Disconnected.");
+    }
+
+    // ---- Shared file via the Google Picker ----
+    // With the drive.file scope, the app can only touch files it created or that
+    // the user explicitly opens with the Picker. So to collaborate on one shared
+    // file, each person picks it here (they must already have edit access via the
+    // Drive share link), which grants this app access to that single file.
+    function pickerReady() {
+      return !!(window.google && google.picker);
+    }
+    function loadPicker(cb) {
+      if (pickerReady()) return cb(true);
+      if (!window.gapi) return cb(false);
+      try { gapi.load("picker", { callback: () => cb(pickerReady()) }); } catch (_) { cb(false); }
+    }
+    async function openPicker() {
+      sessionMode = "drive";
+      if (!clientId) { setStatus("No OAuth Client ID configured.", "err"); return; }
+      try {
+        if (!connected) { setStatus("Connecting…"); await authenticate(); }
+      } catch (e) { setStatus("Could not connect: " + e.message, "err"); return; }
+      getToken(false)
+        .then((t) => {
+          loadPicker((ok) => {
+            if (!ok) { setStatus("Couldn't load the Google Picker (offline?).", "err"); return; }
+            const appId = clientId.split("-")[0];
+            const mine = new google.picker.DocsView(google.picker.ViewId.DOCS)
+              .setMimeTypes("application/json").setOwnedByMe(true);
+            const shared = new google.picker.DocsView(google.picker.ViewId.DOCS)
+              .setMimeTypes("application/json").setOwnedByMe(false);
+            const builder = new google.picker.PickerBuilder()
+              .setOAuthToken(t)
+              .setAppId(appId)
+              .setTitle("Open a shared floor plan")
+              .addView(mine)
+              .addView(shared)
+              .setCallback(pickerCallback);
+            if (apiKey) builder.setDeveloperKey(apiKey);
+            builder.build().setVisible(true);
+          });
+        })
+        .catch((e) => setStatus("Picker error: " + e.message, "err"));
+    }
+    function pickerCallback(data) {
+      const P = window.google && google.picker;
+      if (!P || !data || data.action !== P.Action.PICKED) return;
+      const f = data.docs && data.docs[0];
+      if (!f) return;
+      sharedFileId = f.id;
+      lsSet(LS.sharedFile, sharedFileId);
+      connected = true; lsSet(LS.connected, "1");
+      updateUI();
+      connectChoice("the shared plan"); // choose: upload local, or load the shared file
+    }
+    function leaveShared() {
+      sharedFileId = "";
+      lsSet(LS.sharedFile, "");
+      updateUI();
+      setStatus("Back to your own plan. Sync to load it.");
     }
 
     function open() {
@@ -2039,6 +2268,12 @@
       el("drive-connect").addEventListener("click", connect);
       el("drive-disconnect").addEventListener("click", disconnect);
       el("drive-syncnow").addEventListener("click", () => syncNow(true, "auto"));
+      el("drive-pick").addEventListener("click", openPicker);
+      el("drive-leave-shared").addEventListener("click", leaveShared);
+      el("drive-clientname").addEventListener("input", (e) => {
+        clientName = e.target.value.trim();
+        lsSet("floorplan.clientName", clientName);
+      });
       el("drive-force-up").addEventListener("click", () => {
         if (confirm("Overwrite the copy in Google Drive with THIS device's plan?")) syncNow(true, "forceUp");
       });
@@ -2055,17 +2290,11 @@
     function boot() {
       bindEvents();
       updateUI();
-      // If previously connected with auto-sync on, silently pull the latest once
-      // the library loads. With auto-sync off we leave it to manual Sync/Force.
-      if (connected && clientId && auto) {
-        waitForGis((ok) => {
-          if (!ok) { setStatus("Google library unavailable (offline?).", "err"); return; }
-          getToken(false).then(() => syncNow(false, "auto")).catch(() => setStatus("Sign-in expired — open Drive and reconnect.", "err"));
-        });
-      }
+      // Loading from Drive is now driven by the first-load prompt (useDrive),
+      // so the user consciously chooses Drive vs local on every load.
     }
 
-    return { scheduleSync, boot, nextRev };
+    return { scheduleSync, boot, nextRev, open, useLocal, useDrive, openShared };
   })();
 
   // ---------------------------------------------------------------------------
@@ -2141,6 +2370,18 @@
   el("btn-layout-rename").addEventListener("click", renameLayout);
   el("btn-layout-delete").addEventListener("click", deleteLayout);
 
+  // Dismissable canvas hint (stays dismissed on this device).
+  (function hint() {
+    const KEY = "floorplan.hintDismissed";
+    const node = el("hint");
+    if (!node) return;
+    if (localStorage.getItem(KEY)) { node.classList.add("dismissed"); return; }
+    el("hint-close").addEventListener("click", () => {
+      node.classList.add("dismissed");
+      try { localStorage.setItem(KEY, "1"); } catch (_) {}
+    });
+  })();
+
   window.addEventListener("resize", render);
   // Re-render whenever the canvas area itself resizes — e.g. the bottom panel
   // collapsing on mobile grows the canvas, and the grid must fill the new space
@@ -2171,4 +2412,15 @@
   refreshPanel();
   fitView();
   DRIVE.boot();
+
+  // Shown on EVERY load: a deliberate choice of which state to work on —
+  // sync with Google Drive, or work locally on this device.
+  (function welcome() {
+    const modal = el("welcome-modal");
+    const close = () => { modal.hidden = true; };
+    el("welcome-local").addEventListener("click", () => { DRIVE.useLocal(); close(); });
+    el("welcome-drive").addEventListener("click", () => { close(); DRIVE.useDrive(); });
+    el("welcome-shared").addEventListener("click", () => { close(); DRIVE.openShared(); });
+    modal.hidden = false;
+  })();
 })();

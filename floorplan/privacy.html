@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Privacy Policy · Floor Plan Designer</title>
+    <style>
+      :root { color-scheme: light; }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        color: #1f2933;
+        background: #f4f5f7;
+        line-height: 1.6;
+      }
+      .wrap { max-width: 760px; margin: 0 auto; padding: 32px 20px 64px; }
+      h1 { font-size: 26px; margin: 0 0 4px; }
+      h2 { font-size: 18px; margin: 28px 0 8px; }
+      .muted { color: #6b7280; }
+      a { color: #2563eb; }
+      code { background: #e7e9ee; padding: 1px 5px; border-radius: 4px; font-size: 0.92em; }
+      .card { background: #fff; border: 1px solid #d9dce1; border-radius: 12px; padding: 20px 22px; }
+      ul { padding-left: 20px; }
+      footer { margin-top: 32px; font-size: 14px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <p class="muted"><a href="./">&larr; Floor Plan Designer</a></p>
+      <h1>Privacy Policy</h1>
+      <p class="muted">Last updated: 14 June 2026</p>
+
+      <div class="card">
+        <p>
+          <strong>Floor Plan Designer</strong> (the &ldquo;app&rdquo;) is a free, browser-based tool for sketching
+          room layouts. It is a static web page with <strong>no backend server</strong>: your data stays on your
+          device, and — only if you choose to enable it — in your own Google Drive. We do not run analytics, we do
+          not use tracking cookies, and we never sell or share your data.
+        </p>
+
+        <h2>What the app stores</h2>
+        <ul>
+          <li>
+            <strong>On your device.</strong> Your floor plans, layouts and preferences are saved in your browser&rsquo;s
+            <code>localStorage</code>. This never leaves your device unless you enable Google Drive sync or use
+            Export.
+          </li>
+          <li>
+            <strong>In your Google Drive (optional).</strong> If you connect Google Drive, the app stores a single
+            <code>floorplan.json</code> file containing your plans, so you can sync between devices.
+          </li>
+        </ul>
+
+        <h2>Google Drive access</h2>
+        <p>
+          Drive sync uses the least-privilege <code>https://www.googleapis.com/auth/drive.file</code> scope. This
+          means the app can only see and modify <strong>files it creates, or files you explicitly open with it</strong>
+          — it <strong>cannot</strong> see, read, or access any other files in your Google Drive. Your Google sign-in
+          token is held only in your browser and is used solely to read and write your plan file. You can disconnect
+          at any time from the in-app <em>Drive sync</em> dialog, and revoke access at
+          <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">myaccount.google.com/permissions</a>.
+        </p>
+
+        <h2>Limited Use disclosure</h2>
+        <p>
+          Floor Plan Designer&rsquo;s use and transfer of information received from Google APIs adheres to the
+          <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">Google
+          API Services User Data Policy</a>, including the <strong>Limited Use</strong> requirements. Data obtained
+          through Google Drive is used only to provide the app&rsquo;s sync feature, is processed entirely within your
+          browser, is not transferred to any server, and is not used for advertising or any other purpose.
+        </p>
+
+        <h2>Sharing</h2>
+        <p>
+          The app does not transmit your data to us or to any third party. If you choose to share a Google Drive file
+          with other people, that sharing is governed by Google Drive&rsquo;s own permissions and privacy terms.
+        </p>
+
+        <h2>Deleting your data</h2>
+        <ul>
+          <li>Clear the app&rsquo;s local data via your browser, or use <em>Clear</em> in the app.</li>
+          <li>Disconnect Drive in the app and delete the <code>floorplan.json</code> file from your Google Drive.</li>
+          <li>Revoke the app&rsquo;s Google access at the link above.</li>
+        </ul>
+
+        <h2>Children</h2>
+        <p>The app is a general-purpose tool and is not directed at children under 13.</p>
+
+        <h2>Changes</h2>
+        <p>Updates to this policy will be posted on this page with a revised date.</p>
+
+        <h2>Contact</h2>
+        <p>
+          Questions about this policy can be raised via the project&rsquo;s
+          <a href="https://github.com/mchr3k/mchr3k.github.com/issues" target="_blank" rel="noopener">GitHub issues</a>.
+        </p>
+      </div>
+
+      <footer class="muted">Floor Plan Designer · hosted on GitHub Pages · no servers, no tracking.</footer>
+    </div>
+  </body>
+</html>
