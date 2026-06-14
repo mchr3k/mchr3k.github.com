@@ -246,6 +246,26 @@
       </div>
     </div>
 
+    <div id="direction-modal" class="modal" hidden>
+      <div class="modal-card">
+        <h2 id="direction-title">Working with Google Drive</h2>
+        <p class="muted small">This device has its own plan. Which version do you want to keep?</p>
+        <div class="welcome-choices">
+          <button id="direction-upload" class="welcome-choice">
+            <strong>↑ Keep this device's plan</strong>
+            <span class="muted small">Upload your current plan, overwriting what's there.</span>
+          </button>
+          <button id="direction-load" class="welcome-choice">
+            <strong>↓ Load the saved plan</strong>
+            <span class="muted small">Load it and discard this device's current changes.</span>
+          </button>
+        </div>
+        <div class="drive-row">
+          <button id="direction-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+
 
     <!-- Google Identity Services (for Drive OAuth). Loads only when online. -->
     <script src="https://accounts.google.com/gsi/client" async></script>
