@@ -2216,13 +2216,6 @@
         .then((t) => {
           loadPicker((ok) => {
             if (!ok) { setStatus("Couldn't load the Google Picker (offline?).", "err"); return; }
-            if (!apiKey) {
-              const k = prompt(
-                "Google Picker needs an API key from the same Google Cloud project.\n" +
-                  "Create one under APIs & Services → Credentials, then paste it here:"
-              );
-              if (k) { apiKey = k.trim(); lsSet(LS.apiKey, apiKey); }
-            }
             const appId = clientId.split("-")[0];
             const mine = new google.picker.DocsView(google.picker.ViewId.DOCS)
               .setMimeTypes("application/json").setOwnedByMe(true);
