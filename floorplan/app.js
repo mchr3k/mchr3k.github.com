@@ -385,7 +385,7 @@
         start = cursor + op.gap;
       }
       const end = start + op.width;
-      out.push({ id: op.id, type: op.type, start, end, fits: end <= wallLen + 0.5 });
+      out.push({ id: op.id, type: op.type, hinge: op.hinge, start, end, fits: end <= wallLen + 0.5 });
       cursor = end;
     }
     return out;
@@ -408,7 +408,8 @@
         if (b - a < 0.5) continue;
         const p1 = worldToScreen(room.x + sx + dir[0] * a, room.y + sy + dir[1] * a);
         const p2 = worldToScreen(room.x + sx + dir[0] * b, room.y + sy + dir[1] * b);
-        (p.type === "door" ? drawDoor : drawWindow)(g, p1, p2, inward, room.id, p.id);
+        if (p.type === "door") drawDoor(g, p1, p2, inward, room.id, p.id, p.hinge);
+        else drawWindow(g, p1, p2, inward, room.id, p.id);
       }
     }
   }
@@ -421,18 +422,37 @@
     }));
   }
 
-  function drawDoor(g, p1, p2, inward, roomId, opId) {
+  // A quarter-circle path centred on (cx,cy), from `fromPt` to `toPt`, sampled so
+  // the curve is always the correct convex sweep (SVG arc flags can pick the
+  // wrong centre when the radius equals the chord's circumradius).
+  function arcPath(cx, cy, r, fromPt, toPt) {
+    const a0 = Math.atan2(fromPt[1] - cy, fromPt[0] - cx);
+    let d = Math.atan2(toPt[1] - cy, toPt[0] - cx) - a0;
+    while (d > Math.PI) d -= 2 * Math.PI;
+    while (d < -Math.PI) d += 2 * Math.PI;
+    let s = "";
+    const n = 16;
+    for (let i = 0; i <= n; i++) {
+      const a = a0 + (d * i) / n;
+      s += (i ? "L" : "M") + (cx + r * Math.cos(a)).toFixed(1) + " " + (cy + r * Math.sin(a)).toFixed(1);
+    }
+    return s;
+  }
+
+  function drawDoor(g, p1, p2, inward, roomId, opId, hinge) {
     const r = dist(p1, p2);
+    const out = [-inward[0], -inward[1]]; // door swings to the outside of the room
+    const hingePt = hinge === "end" ? p2 : p1;
+    const farPt = hinge === "end" ? p1 : p2;
+    const tip = [hingePt[0] + out[0] * r, hingePt[1] + out[1] * r];
     const eg = svgEl("g", { class: "opening door", "data-room": roomId, "data-opening": opId, style: "pointer-events:none" });
     maskWall(eg, p1, p2);
-    // Hinge at p1; leaf swings 90° into the room; arc back to the far jamb p2.
-    const tip = [p1[0] + inward[0] * r, p1[1] + inward[1] * r];
-    const sweep = (p2[0] - p1[0]) * inward[1] - (p2[1] - p1[1]) * inward[0] > 0 ? 1 : 0;
+    // Swing arc from the closed (far jamb) to the open (tip) position, centred on the hinge.
     eg.appendChild(svgEl("path", {
-      d: `M ${tip[0].toFixed(1)} ${tip[1].toFixed(1)} A ${r.toFixed(1)} ${r.toFixed(1)} 0 0 ${sweep} ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`,
+      d: arcPath(hingePt[0], hingePt[1], r, farPt, tip),
       fill: "none", stroke: "#64748b", "stroke-width": 1, "stroke-dasharray": "3 3",
     }));
-    eg.appendChild(svgEl("line", { x1: p1[0], y1: p1[1], x2: tip[0], y2: tip[1], stroke: "#475569", "stroke-width": 2 }));
+    eg.appendChild(svgEl("line", { x1: hingePt[0], y1: hingePt[1], x2: tip[0], y2: tip[1], stroke: "#475569", "stroke-width": 2 }));
     g.appendChild(eg);
   }
 
@@ -1108,6 +1128,7 @@
       openingField(o, "gap", "Gap (cm)", "number"),
       openingField(o, "width", "Width (cm)", "number")
     );
+    if (o.type === "door") grid.append(openingField(o, "hinge", "Hinge", "hinge"));
     li.append(head, grid);
     return li;
   }
@@ -1126,13 +1147,16 @@
     const span = document.createElement("span");
     span.textContent = label;
     let input;
-    if (type === "select" || type === "type") {
+    if (type === "select" || type === "type" || type === "hinge") {
       input = document.createElement("select");
-      const opts = type === "type" ? ["door", "window"] : ["top", "right", "bottom", "left"];
+      const labels = type === "type" ? { door: "Door", window: "Window" }
+        : type === "hinge" ? { start: "Wall start", end: "Wall end" }
+        : SIDE_LABELS;
+      const opts = type === "type" ? ["door", "window"] : type === "hinge" ? ["start", "end"] : ["top", "right", "bottom", "left"];
       for (const s of opts) {
         const opt = document.createElement("option");
         opt.value = s;
-        opt.textContent = type === "type" ? s[0].toUpperCase() + s.slice(1) : SIDE_LABELS[s];
+        opt.textContent = labels[s];
         if (o[key] === s) opt.selected = true;
         input.appendChild(opt);
       }
@@ -1161,7 +1185,7 @@
     const room = r.room;
     if (!room.openings) room.openings = [];
     const lastSide = room.openings.length ? room.openings[room.openings.length - 1].side : "top";
-    room.openings.push({ id: uid("op"), type, side: lastSide, gap: 50, width: type === "door" ? 80 : 120 });
+    room.openings.push({ id: uid("op"), type, side: lastSide, hinge: "start", gap: 50, width: type === "door" ? 80 : 120 });
     save();
     render();
     refreshPanel();
@@ -1523,6 +1547,7 @@
           id: o.id || uid("op"),
           type: o.type === "window" ? "window" : "door",
           side: o.side,
+          hinge: o.hinge === "end" ? "end" : "start",
           gap: Math.max(0, Math.round(+o.gap || 0)),
           width: Math.max(1, Math.round(+o.width || 80)),
         })),
