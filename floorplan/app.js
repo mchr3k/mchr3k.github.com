@@ -432,6 +432,12 @@
   const pointers = new Map(); // pointerId -> {x,y}
   let drag = null; // {type, ...}
   let pinch = null; // {startDist, startScale, cx, cy}
+  const TAP_SLOP = 6; // px of finger movement below which a press counts as a tap
+
+  // Do two selections point at the same room/object?
+  function sameSel(a, b) {
+    return !!a && !!b && a.kind === b.kind && a.roomId === b.roomId && (a.objId || null) === (b.objId || null);
+  }
 
   svg.addEventListener("pointerdown", onPointerDown);
   svg.addEventListener("pointermove", onPointerMove);
@@ -439,6 +445,15 @@
   svg.addEventListener("pointercancel", onPointerUp);
 
   function onPointerDown(e) {
+    // iOS Safari can drop a pointerup/pointercancel, leaving a stale pointer in
+    // the map; the next touch then looks like a second finger and triggers a
+    // false pinch-zoom. A *primary* pointerdown is the first finger of a fresh
+    // gesture, so anything left over is stale — start from a clean slate.
+    if (e.isPrimary) {
+      pointers.clear();
+      pinch = null;
+      drag = null;
+    }
     pointers.set(e.pointerId, mousePos(e));
 
     // Two fingers -> pinch zoom / pan; cancel any single-item drag.
@@ -457,7 +472,7 @@
     }
 
     const target = e.target.closest("[data-kind]");
-    svg.setPointerCapture(e.pointerId);
+    try { svg.setPointerCapture(e.pointerId); } catch (_) {}
 
     if (!target || target.getAttribute("data-kind") === undefined) {
       startPan(e);
@@ -472,17 +487,20 @@
 
     const roomId = target.getAttribute("data-room");
     const objId = target.getAttribute("data-obj");
+    const [gmx, gmy] = mousePos(e);
     if (kind === "object") {
+      const wasSelected = sameSel(selection, { kind: "object", roomId, objId });
       select({ kind: "object", roomId, objId });
       const room = state.rooms.find((r) => r.id === roomId);
       const obj = room.objects.find((o) => o.id === objId);
-      const [wx, wy] = screenToWorld(...mousePos(e));
-      drag = { type: "object", room, obj, startX: obj.x, startY: obj.y, grabX: wx, grabY: wy, moved: false };
+      const [wx, wy] = screenToWorld(gmx, gmy);
+      drag = { type: "object", room, obj, startX: obj.x, startY: obj.y, grabX: wx, grabY: wy, grabMx: gmx, grabMy: gmy, moved: false, wasSelected };
     } else if (kind === "room") {
+      const wasSelected = sameSel(selection, { kind: "room", roomId });
       select({ kind: "room", roomId });
       const room = state.rooms.find((r) => r.id === roomId);
-      const [wx, wy] = screenToWorld(...mousePos(e));
-      drag = { type: "room", room, startX: room.x, startY: room.y, grabX: wx, grabY: wy, moved: false };
+      const [wx, wy] = screenToWorld(gmx, gmy);
+      drag = { type: "room", room, startX: room.x, startY: room.y, grabX: wx, grabY: wy, grabMx: gmx, grabMy: gmy, moved: false, wasSelected };
     }
   }
 
@@ -522,10 +540,15 @@
       return;
     }
 
+    // Ignore tiny finger jitter so a tap stays a tap (and can deselect).
+    if (!drag.moved) {
+      if (Math.hypot(mx - drag.grabMx, my - drag.grabMy) < TAP_SLOP) return;
+      drag.moved = true;
+    }
+
     const [wx, wy] = screenToWorld(mx, my);
     const dx = wx - drag.grabX;
     const dy = wy - drag.grabY;
-    drag.moved = true;
     if (drag.type === "object") {
       drag.obj.x = snapVal(drag.startX + dx);
       drag.obj.y = snapVal(drag.startY + dy);
@@ -543,7 +566,12 @@
       try { svg.releasePointerCapture(e.pointerId); } catch (_) {}
     }
     if (pointers.size < 2) pinch = null;
-    if (drag && drag.moved) save();
+    if (drag) {
+      if (drag.moved) save();
+      // A tap (no drag) on the already-selected item clears the selection —
+      // a reliable way to deselect on touch, where empty canvas is scarce.
+      else if ((drag.type === "object" || drag.type === "room") && drag.wasSelected) select(null);
+    }
     drag = null;
   }
 
@@ -601,7 +629,13 @@
     input.focus();
     input.select();
 
+    // `closing` guards against re-entry: committing removes the focused input,
+    // which fires `blur` — without the guard that would apply the edit a second
+    // time (doubling the delta), and Escape would commit instead of cancel.
+    let closing = false;
     const commit = () => {
+      if (closing) return;
+      closing = true;
       const v = parseFloat(input.value);
       if (!isNaN(v) && v >= 1) {
         edge.ctl(v, oldLen);
@@ -611,9 +645,14 @@
       render();
       refreshPanel();
     };
+    const cancel = () => {
+      if (closing) return;
+      closing = true;
+      closeEdgeEditor();
+    };
     input.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter") commit();
-      else if (ev.key === "Escape") closeEdgeEditor();
+      else if (ev.key === "Escape") cancel();
     });
     input.addEventListener("blur", commit);
     edgeEditor = input;
@@ -1084,7 +1123,14 @@
   // ---------------------------------------------------------------------------
   function serialize() {
     return JSON.stringify(
-      { version: SCHEMA_VERSION, updatedAt: doc.updatedAt || Date.now(), activeId: doc.activeId, view, layouts: doc.layouts },
+      {
+        version: SCHEMA_VERSION,
+        rev: doc.rev || 0,
+        updatedAt: doc.updatedAt || 0,
+        activeId: doc.activeId,
+        view,
+        layouts: doc.layouts,
+      },
       null,
       2
     );
@@ -1176,8 +1222,8 @@
       layouts = [{ id: uid("l"), name: "Layout 1", rooms: (data.rooms || []).map(normalizeRoom) }];
     }
     const activeId = layouts.some((l) => l.id === data.activeId) ? data.activeId : layouts[0].id;
-    // Missing/zero updatedAt stays 0 so it can't masquerade as newer than Drive.
-    return { version: SCHEMA_VERSION, updatedAt: +data.updatedAt || 0, activeId, layouts };
+    // Missing rev/updatedAt stay 0 so an untouched copy can't outrank real data.
+    return { version: SCHEMA_VERSION, rev: +data.rev || 0, updatedAt: +data.updatedAt || 0, activeId, layouts };
   }
 
   // Replace the whole document with one pulled from Drive, without bumping the
@@ -1201,7 +1247,11 @@
   let saveTimer = null;
   let suppressSync = false; // true while applying a remote doc, to avoid loops
   function save() {
-    if (!suppressSync) doc.updatedAt = Date.now();
+    if (!suppressSync) {
+      // Bump the monotonic revision (skew-proof ordering) and a display time.
+      doc.rev = DRIVE.nextRev();
+      doc.updatedAt = Date.now();
+    }
     try {
       localStorage.setItem(STORAGE_KEY, serialize());
     } catch (_) {}
@@ -1226,8 +1276,9 @@
     const layoutId = uid("l");
     return {
       version: SCHEMA_VERSION,
-      // updatedAt 0 marks this as an untouched default: it must never outrank a
+      // rev/updatedAt 0 mark this as an untouched default: it must never outrank a
       // real plan in Drive on first sync. The first real edit stamps it via save().
+      rev: 0,
       updatedAt: 0,
       activeId: layoutId,
       layouts: [
@@ -1276,12 +1327,14 @@
       fileId: "floorplan.drive.fileId",
       connected: "floorplan.drive.connected",
       auto: "floorplan.drive.auto",
+      lastRev: "floorplan.drive.lastRev",
     };
 
     let clientId = localStorage.getItem(LS.clientId) || DEFAULT_CLIENT_ID;
     let fileId = localStorage.getItem(LS.fileId) || "";
     let connected = localStorage.getItem(LS.connected) === "1";
     let auto = localStorage.getItem(LS.auto) !== "0";
+    let lastSeenRev = +localStorage.getItem(LS.lastRev) || 0;
     let token = null;
     let tokenExp = 0;
     let tokenClient = null;
@@ -1289,6 +1342,10 @@
     let timer = null;
 
     const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (_) {} };
+    function setLastSeenRev(r) { lastSeenRev = Math.max(lastSeenRev, +r || 0); lsSet(LS.lastRev, String(lastSeenRev)); }
+    // Monotonic revision for the next local edit (Lamport clock): always greater
+    // than any revision this device has observed, so ordering survives clock skew.
+    function nextRev() { return Math.max(+doc.rev || 0, lastSeenRev) + 1; }
 
     function setStatus(msg, kind) {
       const node = el("drive-status");
@@ -1308,6 +1365,7 @@
       el("drive-connect").hidden = connected;
       el("drive-disconnect").hidden = !connected;
       el("drive-syncnow").hidden = !connected;
+      el("drive-force-row").hidden = !connected;
       pill();
     }
 
@@ -1360,12 +1418,18 @@
       return { ...o, headers: { ...(o.headers || {}), Authorization: "Bearer " + t } };
     }
 
-    async function findFile() {
+    // List *all* copies of the plan the app can see. Earlier bugs (and two
+    // devices connecting before either's file was indexed) can leave duplicate
+    // `floorplan.json` files; we reconcile them rather than trust a stored id.
+    async function listFiles() {
       const q = encodeURIComponent(`name='${FILE_NAME}' and trashed=false`);
-      const res = await api(`https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id,modifiedTime)`);
+      const res = await api(
+        `https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&orderBy=createdTime&fields=files(id,createdTime,modifiedTime)`
+      );
       const data = await res.json();
-      return data.files && data.files[0];
+      return data.files || [];
     }
+    const tms = (s) => (s ? new Date(s).getTime() || 0 : 0);
     async function downloadFile(id) {
       const res = await api(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`);
       return res.text();
@@ -1392,51 +1456,81 @@
       });
     }
 
-    async function syncNow(interactive, firstConnect) {
+    // mode: "auto" | "firstConnect" | "forceUp" | "forceDown"
+    async function syncNow(interactive, mode) {
       if (!connected || busy) return;
       busy = true;
       setStatus("Syncing…");
       try {
-        // Make sure we have a token (and, on first run, locate any existing file).
         await getToken(interactive);
-        if (!fileId) {
-          const f = await findFile();
-          if (f) { fileId = f.id; lsSet(LS.fileId, fileId); }
-        }
-        if (!fileId) {
+        const files = await listFiles();
+
+        // No file yet -> create one from the local plan.
+        if (files.length === 0) {
           fileId = await createFile(serialize());
           lsSet(LS.fileId, fileId);
+          setLastSeenRev(+doc.rev || 0);
           setStatus("Saved to Drive · " + timeNow());
-        } else {
-          const text = await downloadFile(fileId);
-          let remote = null;
-          try { remote = JSON.parse(text); } catch (_) {}
-          const remoteAt = (remote && +remote.updatedAt) || 0;
-          const localAt = +doc.updatedAt || 0;
-          if (remote && remoteAt > localAt) {
-            applyRemoteDoc(normalize(remote));
-            setStatus("Updated from Drive · " + timeNow());
-          } else if (localAt > remoteAt) {
-            // First sync after connecting a device: if this device's edits would
-            // overwrite an existing Drive plan, confirm rather than silently win.
-            if (firstConnect && remote) {
-              const ok = confirm(
-                "This device has changes that are newer than the plan already in Google Drive.\n\n" +
-                  "OK — overwrite Drive with this device's version.\n" +
-                  "Cancel — discard this device's changes and load the version from Drive."
-              );
-              if (!ok) {
-                applyRemoteDoc(normalize(remote));
-                setStatus("Loaded from Drive · " + timeNow());
-                pill();
-                return;
-              }
-            }
-            await updateFile(fileId, serialize());
-            setStatus("Saved to Drive · " + timeNow());
-          } else {
-            setStatus("Up to date · " + timeNow());
+          pill();
+          return;
+        }
+
+        // Canonical = earliest-created copy (deterministic across devices).
+        files.sort((a, b) => tms(a.createdTime) - tms(b.createdTime));
+        const canonical = files[0].id;
+        fileId = canonical;
+        lsSet(LS.fileId, canonical);
+
+        // Read every copy; the winner is the highest revision (then newest time).
+        let best = null;
+        for (const f of files) {
+          try {
+            const d = JSON.parse(await downloadFile(f.id));
+            const rev = +d.rev || 0;
+            const at = +d.updatedAt || 0;
+            if (!best || rev > best.rev || (rev === best.rev && at > best.at)) best = { id: f.id, doc: d, rev, at };
+          } catch (_) {}
+        }
+        const note = files.length > 1 ? " · merged " + files.length + " copies" : "";
+        const localRev = +doc.rev || 0;
+        const remoteRev = best ? best.rev : 0;
+
+        const pull = async (label) => {
+          applyRemoteDoc(normalize(best.doc));
+          setLastSeenRev(remoteRev);
+          if (best.id !== canonical) await updateFile(canonical, serialize()); // converge onto canonical
+          setStatus(label + note + " · " + timeNow());
+        };
+        const push = async (label) => {
+          await updateFile(canonical, serialize());
+          setLastSeenRev(+doc.rev || 0);
+          setStatus(label + note + " · " + timeNow());
+        };
+
+        if (mode === "forceDown") {
+          if (best) await pull("Loaded from Drive");
+          else setStatus("Nothing in Drive yet" + note);
+        } else if (mode === "forceUp") {
+          doc.rev = Math.max(localRev, remoteRev) + 1; // guarantee this device wins
+          try { localStorage.setItem(STORAGE_KEY, serialize()); } catch (_) {}
+          await push("Uploaded to Drive");
+        } else if (best && remoteRev > localRev) {
+          await pull("Updated from Drive");
+        } else if (localRev > remoteRev) {
+          if (mode === "firstConnect" && best) {
+            const ok = confirm(
+              "This device has changes that are newer than the plan already in Google Drive.\n\n" +
+                "OK — overwrite Drive with this device's version.\n" +
+                "Cancel — discard this device's changes and load the version from Drive."
+            );
+            if (!ok) { await pull("Loaded from Drive"); pill(); return; }
           }
+          await push("Saved to Drive");
+        } else {
+          // Same revision. Make sure the canonical copy holds it if duplicates exist.
+          setLastSeenRev(remoteRev);
+          if (files.length > 1) await updateFile(canonical, serialize());
+          setStatus("Up to date" + note + " · " + timeNow());
         }
         pill();
       } catch (e) {
@@ -1455,7 +1549,7 @@
     function scheduleSync() {
       if (!connected || !auto) return;
       clearTimeout(timer);
-      timer = setTimeout(() => syncNow(false), 2500);
+      timer = setTimeout(() => syncNow(false, "auto"), 2500);
     }
 
     async function connect() {
@@ -1467,7 +1561,7 @@
         connected = true;
         lsSet(LS.connected, "1");
         updateUI();
-        await syncNow(true, true);
+        await syncNow(true, "firstConnect");
       } catch (e) {
         setStatus("Could not connect: " + e.message, "err");
       }
@@ -1499,7 +1593,13 @@
       el("drive-modal").addEventListener("click", (e) => { if (e.target.id === "drive-modal") close(); });
       el("drive-connect").addEventListener("click", connect);
       el("drive-disconnect").addEventListener("click", disconnect);
-      el("drive-syncnow").addEventListener("click", () => syncNow(true));
+      el("drive-syncnow").addEventListener("click", () => syncNow(true, "auto"));
+      el("drive-force-up").addEventListener("click", () => {
+        if (confirm("Overwrite the copy in Google Drive with THIS device's plan?")) syncNow(true, "forceUp");
+      });
+      el("drive-force-down").addEventListener("click", () => {
+        if (confirm("Overwrite THIS device's plan with the copy from Google Drive?")) syncNow(true, "forceDown");
+      });
       el("drive-auto").addEventListener("change", (e) => {
         auto = e.target.checked;
         lsSet(LS.auto, auto ? "1" : "0");
@@ -1510,16 +1610,17 @@
     function boot() {
       bindEvents();
       updateUI();
-      // If previously connected, try a silent token + sync once the lib loads.
-      if (connected && clientId) {
+      // If previously connected with auto-sync on, silently pull the latest once
+      // the library loads. With auto-sync off we leave it to manual Sync/Force.
+      if (connected && clientId && auto) {
         waitForGis((ok) => {
           if (!ok) { setStatus("Google library unavailable (offline?).", "err"); return; }
-          getToken(false).then(() => syncNow(false)).catch(() => setStatus("Sign-in expired — open Drive and reconnect.", "err"));
+          getToken(false).then(() => syncNow(false, "auto")).catch(() => setStatus("Sign-in expired — open Drive and reconnect.", "err"));
         });
       }
     }
 
-    return { scheduleSync, boot };
+    return { scheduleSync, boot, nextRev };
   })();
 
   // ---------------------------------------------------------------------------
@@ -1554,6 +1655,7 @@
   el("btn-rotate").addEventListener("click", rotateSel);
   el("btn-duplicate").addEventListener("click", duplicateSel);
   el("btn-delete").addEventListener("click", deleteSel);
+  el("btn-deselect").addEventListener("click", () => select(null));
   el("btn-zoom-in").addEventListener("click", () => zoomBy(1.2));
   el("btn-zoom-out").addEventListener("click", () => zoomBy(1 / 1.2));
   el("btn-zoom-reset").addEventListener("click", fitView);

@@ -62,7 +62,7 @@
         <svg id="canvas" xmlns="http://www.w3.org/2000/svg"></svg>
         <div id="hint" class="hint">
           Drag the background to pan · scroll to zoom · drag rooms/objects to move them ·
-          click any edge length to edit it
+          click any edge length to edit it · tap a selected item again (or Done ✕) to deselect
         </div>
       </div>
 
@@ -82,7 +82,10 @@
         </div>
 
         <div id="panel-details" class="panel-section" hidden>
-          <h2 id="panel-title">Details</h2>
+          <div class="panel-head">
+            <h2 id="panel-title">Details</h2>
+            <button id="btn-deselect" type="button" class="panel-close" title="Deselect (Esc)" aria-label="Deselect">Done ✕</button>
+          </div>
 
           <label class="field">
             <span>Name</span>
@@ -159,7 +162,16 @@
           <button id="drive-syncnow" hidden>Sync now</button>
         </div>
 
+        <div class="drive-row" id="drive-force-row" hidden>
+          <button id="drive-force-up" title="Overwrite the Drive copy with THIS device's plan">↑ Force this device → Drive</button>
+          <button id="drive-force-down" title="Overwrite THIS device with the Drive copy">↓ Force Drive → this device</button>
+        </div>
+
         <label class="check"><input type="checkbox" id="drive-auto" checked /> Auto-sync changes</label>
+        <p class="muted small">
+          Use <strong>Force</strong> to resolve a mismatch by hand: push this device's plan up, or pull
+          Drive's copy down, regardless of which looks newer.
+        </p>
         <p id="drive-status" class="drive-status"></p>
       </div>
     </div>
