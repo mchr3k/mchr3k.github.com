@@ -34,9 +34,9 @@
   let state;
   // View transform: screen_px = world_cm * scale + offset
   let view = { scale: 0.45, ox: 70, oy: 70 };
-  let ui = { grid: true, snap: true, edges: true, gridCm: 10 };
-  // The Edge lengths / Grid / Snap toggles persist per device. Loaded into `ui`
-  // before the first render, then mirrored onto the checkboxes.
+  let ui = { grid: true, snap: true, edges: true, area: false, gridCm: 10 };
+  // The Edge lengths / Grid / Snap / Area toggles persist per device. Loaded into
+  // `ui` before the first render, then mirrored onto the checkboxes.
   const UI_PREFS_KEY = "floorplan.uiprefs.v1";
   function loadUiPrefs() {
     try {
@@ -45,18 +45,20 @@
         if (typeof p.grid === "boolean") ui.grid = p.grid;
         if (typeof p.snap === "boolean") ui.snap = p.snap;
         if (typeof p.edges === "boolean") ui.edges = p.edges;
+        if (typeof p.area === "boolean") ui.area = p.area;
       }
     } catch (_) {}
   }
   function saveUiPrefs() {
     try {
-      localStorage.setItem(UI_PREFS_KEY, JSON.stringify({ grid: ui.grid, snap: ui.snap, edges: ui.edges }));
+      localStorage.setItem(UI_PREFS_KEY, JSON.stringify({ grid: ui.grid, snap: ui.snap, edges: ui.edges, area: ui.area }));
     } catch (_) {}
   }
   function syncUiControls() {
     el("chk-edges").checked = ui.edges;
     el("chk-grid").checked = ui.grid;
     el("chk-snap").checked = ui.snap;
+    el("chk-area").checked = ui.area;
   }
   /** @type {{kind:'room'|'object', roomId:string, objId?:string}|null} */
   let selection = null;
@@ -679,6 +681,24 @@
     g.appendChild(eg);
   }
 
+  // Floor area in m² of the room outline (shoelace on the local-cm polygon, so
+  // cut-ins reduce it and cut-outs add to it).
+  function roomAreaM2(room) {
+    const pts = itemLocalGeometry(room).points;
+    let a = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const [x1, y1] = pts[i];
+      const [x2, y2] = pts[(i + 1) % pts.length];
+      a += x1 * y2 - x2 * y1;
+    }
+    return Math.abs(a) / 2 / 10000; // cm² -> m²
+  }
+
+  // The room's display label: name, plus its area in m² when the Area toggle is on.
+  function roomLabelText(room) {
+    return ui.area ? `${room.name} (${roomAreaM2(room).toFixed(1)} m²)` : room.name;
+  }
+
   function drawRoom(room) {
     const sel = selection && selection.kind === "room" && selection.roomId === room.id;
     const geo = itemGeometry(room, room, 0);
@@ -702,7 +722,7 @@
       const xs = c.map((p) => p[0]), oys = c.map((p) => p[1]);
       return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...oys), y1: Math.max(...oys) };
     });
-    const place = roomLabelPlacement(geo.corners, room.name, objRects);
+    const place = roomLabelPlacement(geo.corners, roomLabelText(room), objRects);
     if (place) {
       g.appendChild(textLabel(place.x, place.y, place.text, { weight: 700, size: 15, fill: "#1f2933" }));
     }
@@ -3100,6 +3120,7 @@
   el("chk-edges").addEventListener("change", (e) => { ui.edges = e.target.checked; saveUiPrefs(); render(); });
   el("chk-grid").addEventListener("change", (e) => { ui.grid = e.target.checked; saveUiPrefs(); render(); });
   el("chk-snap").addEventListener("change", (e) => { ui.snap = e.target.checked; saveUiPrefs(); });
+  el("chk-area").addEventListener("change", (e) => { ui.area = e.target.checked; saveUiPrefs(); render(); });
   el("btn-export").addEventListener("click", exportPlan);
   el("btn-import").addEventListener("click", () => el("file-import").click());
   el("file-import").addEventListener("change", (e) => {
