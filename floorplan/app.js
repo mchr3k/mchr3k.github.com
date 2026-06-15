@@ -561,7 +561,7 @@
         const a = clamp(p.start, 0, seg.len), b = clamp(p.end, 0, seg.len);
         if (b - a < 0.5) continue;
         const p1 = at(a), p2 = at(b);
-        if (p.type === "door") drawDoor(g, p1, p2, seg.inward, room.id, p.op.id, p.hinge, p.swing);
+        if (p.type === "door") drawDoor(g, p1, p2, seg.inward, room.id, p.op.id, p.hinge, p.swing, p.op.frame || 0, (p.op.leaf || "yes") !== "no");
         else drawWindow(g, p1, p2, seg.inward, room.id, p.op.id);
         // While dragging this opening, show the clear gap on each side.
         if (drag && drag.type === "opening" && drag.op === p.op) {
@@ -618,21 +618,38 @@
     return s;
   }
 
-  function drawDoor(g, p1, p2, inward, roomId, opId, hinge, swing) {
-    const r = dist(p1, p2);
+  function drawDoor(g, p1, p2, inward, roomId, opId, hinge, swing, frameCm, hasLeaf) {
+    const fullPx = dist(p1, p2) || 1;
+    // Frame width per side in screen px, capped so a leaf always remains.
+    const fpx = Math.min(Math.max(0, (frameCm || 0) * view.scale), fullPx * 0.45);
+    const ux = (p2[0] - p1[0]) / fullPx, uy = (p2[1] - p1[1]) / fullPx; // along the wall
+    // Clear-opening jambs, inset from each end by the frame.
+    const j1 = [p1[0] + ux * fpx, p1[1] + uy * fpx];
+    const j2 = [p2[0] - ux * fpx, p2[1] - uy * fpx];
+    const r = dist(j1, j2); // the leaf only spans the clear opening
     const dirVec = swing === "in" ? inward : [-inward[0], -inward[1]];
-    const hingePt = hinge === "end" ? p2 : p1;
-    const farPt = hinge === "end" ? p1 : p2;
+    const hingePt = hinge === "end" ? j2 : j1;
+    const farPt = hinge === "end" ? j1 : j2;
     const tip = [hingePt[0] + dirVec[0] * r, hingePt[1] + dirVec[1] * r];
     const eg = svgEl("g", { class: "opening door", "data-kind": "opening", "data-room": roomId, "data-opening": opId, style: "cursor:move" });
     openingHit(eg, p1, p2, inward);
-    maskWall(eg, p1, p2);
-    // Swing arc from the closed (far jamb) to the open (tip) position, centred on the hinge.
-    eg.appendChild(svgEl("path", {
-      d: arcPath(hingePt[0], hingePt[1], r, farPt, tip),
-      fill: "none", stroke: "#64748b", "stroke-width": 1, "stroke-dasharray": "3 3", style: "pointer-events:none",
-    }));
-    eg.appendChild(svgEl("line", { x1: hingePt[0], y1: hingePt[1], x2: tip[0], y2: tip[1], stroke: "#475569", "stroke-width": 2, style: "pointer-events:none" }));
+    // Only the clear opening is cut away; the frame bands stay as wall.
+    maskWall(eg, j1, j2);
+    if (fpx > 0.5) {
+      // Mark each frame band on the wall edge as part of the door.
+      eg.appendChild(svgEl("line", { x1: p1[0], y1: p1[1], x2: j1[0], y2: j1[1], stroke: "#475569", "stroke-width": 4, "stroke-linecap": "butt", style: "pointer-events:none" }));
+      eg.appendChild(svgEl("line", { x1: p2[0], y1: p2[1], x2: j2[0], y2: j2[1], stroke: "#475569", "stroke-width": 4, "stroke-linecap": "butt", style: "pointer-events:none" }));
+    }
+    // With no leaf it's an open doorway: show the opening (and frame) but no
+    // swing arc or door line.
+    if (hasLeaf) {
+      // Swing arc from the closed (far jamb) to the open (tip) position, centred on the hinge.
+      eg.appendChild(svgEl("path", {
+        d: arcPath(hingePt[0], hingePt[1], r, farPt, tip),
+        fill: "none", stroke: "#64748b", "stroke-width": 1, "stroke-dasharray": "3 3", style: "pointer-events:none",
+      }));
+      eg.appendChild(svgEl("line", { x1: hingePt[0], y1: hingePt[1], x2: tip[0], y2: tip[1], stroke: "#475569", "stroke-width": 2, style: "pointer-events:none" }));
+    }
     g.appendChild(eg);
   }
 
@@ -883,10 +900,18 @@
       "text-anchor": "middle", "font-size": size, "font-weight": weight, fill: "#1f2933",
       "font-family": "system-ui, sans-serif", style: "pointer-events:none; user-select:none",
     };
-    if (vertical) attrs.transform = `rotate(-90 ${center[0].toFixed(1)} ${center[1].toFixed(1)})`;
     const t = svgEl("text", attrs);
     lines.forEach((ln, i) => t.appendChild(svgEl("tspan", { x: center[0], y: startY + i * lineH }, ln)));
-    g.appendChild(t);
+    if (vertical) {
+      // iOS Safari/WebKit ignores a `transform` set directly on <text> (more so
+      // when it holds <tspan>s with absolute x/y), so rotate a wrapping <g>
+      // instead — that renders consistently across browsers.
+      const rg = svgEl("g", { transform: `rotate(-90 ${center[0].toFixed(1)} ${center[1].toFixed(1)})` });
+      rg.appendChild(t);
+      g.appendChild(rg);
+    } else {
+      g.appendChild(t);
+    }
   }
 
   function textLabel(x, y, str, opt = {}) {
@@ -1552,7 +1577,11 @@
       openingField(o, "width", "Width (cm)", "number")
     );
     if (o.type === "door") {
-      grid.append(openingField(o, "hinge", "Hinge", "hinge"), openingField(o, "swing", "Swing", "swing"));
+      grid.append(openingField(o, "leaf", "Leaf", "leaf"));
+      if ((o.leaf || "yes") !== "no") {
+        grid.append(openingField(o, "hinge", "Hinge", "hinge"), openingField(o, "swing", "Swing", "swing"));
+      }
+      grid.append(openingField(o, "frame", "Frame each side (cm)", "number"));
     }
     li.append(head, grid);
     return li;
@@ -1613,15 +1642,17 @@
     const span = document.createElement("span");
     span.textContent = label;
     let input;
-    if (type === "select" || type === "type" || type === "hinge" || type === "swing") {
+    if (type === "select" || type === "type" || type === "hinge" || type === "swing" || type === "leaf") {
       input = document.createElement("select");
       const labels = type === "type" ? { door: "Door", window: "Window" }
         : type === "hinge" ? { start: "Wall start", end: "Wall end" }
         : type === "swing" ? { out: "Outward", in: "Inward" }
+        : type === "leaf" ? { yes: "Door", no: "Open (no door)" }
         : SIDE_LABELS;
       const opts = type === "type" ? ["door", "window"]
         : type === "hinge" ? ["start", "end"]
         : type === "swing" ? ["out", "in"]
+        : type === "leaf" ? ["yes", "no"]
         : ["top", "right", "bottom", "left"];
       for (const s of opts) {
         const opt = document.createElement("option");
@@ -1634,13 +1665,17 @@
     } else {
       input = document.createElement("input");
       input.type = "number";
-      input.min = key === "gap" ? "0" : "1";
+      const allowZero = key === "gap" || key === "frame";
+      input.min = allowZero ? "0" : "1";
       input.step = "1";
-      input.value = round(o[key]);
+      input.value = round(o[key] || 0);
       input.addEventListener("input", (e) => {
         const v = parseFloat(e.target.value);
         if (isNaN(v)) return;
-        o[key] = Math.max(key === "gap" ? 0 : 1, round(v));
+        let nv = Math.max(allowZero ? 0 : 1, round(v));
+        // Keep at least a 2 cm leaf: frame on each side can't eat the whole door.
+        if (key === "frame") nv = Math.min(nv, Math.max(0, Math.floor((o.width - 2) / 2)));
+        o[key] = nv;
         render();
         saveSoon();
       });
@@ -1655,7 +1690,7 @@
     const room = r.room;
     if (!room.openings) room.openings = [];
     const lastSide = room.openings.length ? room.openings[room.openings.length - 1].side : "top";
-    room.openings.push({ id: uid("op"), type, side: lastSide, notch: null, hinge: "start", swing: "out", gap: 50, width: type === "door" ? 80 : 120 });
+    room.openings.push({ id: uid("op"), type, side: lastSide, notch: null, hinge: "start", swing: "out", leaf: "yes", gap: 50, width: type === "door" ? 80 : 120, frame: 0 });
     save();
     render();
     refreshPanel();
@@ -2079,8 +2114,14 @@
           notchEdge: ["side1", "side2"].includes(o.notchEdge) ? o.notchEdge : "face",
           hinge: o.hinge === "end" ? "end" : "start",
           swing: o.swing === "in" ? "in" : "out",
+          // "no" = an open doorway: the opening (and any frame) still shows, but
+          // there's no leaf or swing arc.
+          leaf: o.leaf === "no" ? "no" : "yes",
           gap: Math.max(0, Math.round(+o.gap || 0)),
           width: Math.max(1, Math.round(+o.width || 80)),
+          // Door frame width on *each* side: stays marked on the wall as part of
+          // the door, but the swinging leaf only spans width - 2*frame.
+          frame: Math.max(0, Math.round(+o.frame || 0)),
         })),
       objects: (r.objects || []).map((o) => ({
         id: o.id || uid("o"),
