@@ -283,6 +283,9 @@
 
     if (ui.grid) drawGrid(W, H);
 
+    // Overlay for the dragged item + its temporary labels; appended last below.
+    dragLayer = drag ? svgEl("g", { class: "drag-overlay", style: "pointer-events:none" }) : null;
+
     labelCandidates = [];
     for (const room of state.rooms) {
       drawRoom(room);
@@ -295,6 +298,9 @@
       placeEdgeLabels(layer);
       svg.appendChild(layer);
     }
+    // The drag overlay goes above even the edge labels so it's always visible.
+    if (dragLayer && dragLayer.childNodes.length) svg.appendChild(dragLayer);
+    dragLayer = null;
     updateZoomSelect();
   }
 
@@ -561,12 +567,16 @@
         const a = clamp(p.start, 0, seg.len), b = clamp(p.end, 0, seg.len);
         if (b - a < 0.5) continue;
         const p1 = at(a), p2 = at(b);
-        if (p.type === "door") drawDoor(g, p1, p2, seg.inward, room.id, p.op.id, p.hinge, p.swing, p.op.frame || 0, (p.op.leaf || "yes") !== "no");
-        else drawWindow(g, p1, p2, seg.inward, room.id, p.op.id);
+        // Draw the opening being dragged (and its gap labels) into the top
+        // overlay so it stays above other rooms, objects and edge labels.
+        const dragged = drag && drag.type === "opening" && drag.op === p.op && dragLayer;
+        const t = dragged ? dragLayer : g;
+        if (p.type === "door") drawDoor(t, p1, p2, seg.inward, room.id, p.op.id, p.hinge, p.swing, p.op.frame || 0, (p.op.leaf || "yes") !== "no");
+        else drawWindow(t, p1, p2, seg.inward, room.id, p.op.id);
         // While dragging this opening, show the clear gap on each side.
-        if (drag && drag.type === "opening" && drag.op === p.op) {
-          drawGapLabel(g, at, seg.inward, drag.prevEnd, p.start);
-          drawGapLabel(g, at, seg.inward, p.end, drag.nextStart);
+        if (dragged) {
+          drawGapLabel(dragLayer, at, seg.inward, drag.prevEnd, p.start);
+          drawGapLabel(dragLayer, at, seg.inward, p.end, drag.nextStart);
         }
       }
     }
@@ -731,9 +741,12 @@
     drawObjectName(g, obj, geo.center);
 
     collectEdgeLabels(geo, room.id, obj.id, sel, room.color);
-    if (drag && drag.type === "object" && drag.obj === obj) {
+    if (drag && drag.type === "object" && drag.obj === obj && dragLayer) {
       if (drag.snapGuides) drawSnapGuides(g, room, drag.snapGuides);
       drawObjectClearances(g, room, obj);
+      if (sel) drawHandles(g, geo);
+      dragLayer.appendChild(g); // dragged object + its clearances/guides on top
+      return;
     }
     if (sel) drawHandles(g, geo);
     svg.appendChild(g);
@@ -934,6 +947,10 @@
   // placeEdgeLabels() so overlaps are resolved globally rather than by a blunt
   // per-edge length threshold (which hid short cut-in edges far too eagerly).
   let labelCandidates = [];
+  // While dragging, the dragged item and its temporary measurement labels are
+  // routed into this overlay group, appended last so they sit above every room,
+  // object and edge label. Null when no drag is active.
+  let dragLayer = null;
   function collectEdgeLabels(geo, roomId, objId, selected, tint) {
     if (!ui.edges) return;
     for (const e of geo.edges) {
