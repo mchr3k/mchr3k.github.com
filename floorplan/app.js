@@ -418,10 +418,9 @@
     return lines.length ? lines : null;
   }
 
-  // The leftmost non-degenerate interior horizontal span [x0,x1] of the outline
-  // at screen-y `y` (so the label respects a cut-in eating into that row), or
-  // null if the line misses the polygon's interior.
-  function leftInteriorSpanAt(corners, y) {
+  // Every interior horizontal span [x0,x1] of the outline at screen-y `y`, left
+  // to right (a deep cut-in can split a row into more than one interval).
+  function interiorSpansAt(corners, y) {
     const xs = [];
     for (let i = 0; i < corners.length; i++) {
       const a = corners[i], b = corners[(i + 1) % corners.length];
@@ -430,62 +429,86 @@
       }
     }
     xs.sort((p, q) => p - q);
+    const spans = [];
     for (let i = 0; i + 1 < xs.length; i += 2) {
-      if (xs[i + 1] - xs[i] > 1) return [xs[i], xs[i + 1]]; // first real interior interval
+      if (xs[i + 1] - xs[i] > 1) spans.push([xs[i], xs[i + 1]]);
     }
-    return null;
+    return spans;
   }
 
-  // Place the room name tightly just inside the top, a fixed distance below the
-  // top wall. The whole glyph band must fit inside the outline — sampled at
-  // several rows so a cut-in intruding into the *top* of the text pushes it
-  // aside. Within each band the name first slides right past any room object
-  // (staying high), and only drops to a lower band when nothing in this one is
-  // clear; it contracts to two characters before giving up.
-  function roomLabelPlacement(corners, name, objRects) {
+  // Intersection of two lists of [x0,x1] spans.
+  function clipSpans(a, b) {
+    const out = [];
+    for (const [a0, a1] of a) for (const [b0, b1] of b) {
+      const lo = Math.max(a0, b0), hi = Math.min(a1, b1);
+      if (hi - lo > 1) out.push([lo, hi]);
+    }
+    return out.sort((p, q) => p[0] - q[0]);
+  }
+
+  // Find the best spot for a room label. Searches many vertical bands across the
+  // whole room and every interior region at each band (so it works in L-shaped
+  // rooms and slots next to objects), preferring — in order — a full single line,
+  // then a two-line "name / (area)" wrap, and only truncating as a last resort.
+  // Returns { x, y, lines: [...] }, where y is the first line's baseline.
+  function roomLabelPlacement(corners, name, objRects, extra) {
+    const size = 15, weight = 700, lineH = size * 1.2, pad = 6;
     const ys = corners.map((p) => p[1]);
     const minY = Math.min(...ys), maxY = Math.max(...ys);
     if (maxY - minY < 24) return null;
-    const pad = 6;
-    let fallback = null;
-    for (const dy of [21, 44, 67, 90, 113]) {
-      const baseline = minY + dy;
-      if (baseline > maxY - 3) break;
-      let L = -Infinity, R = Infinity, ok = true;
-      for (const yy of [baseline - 12, baseline - 7, baseline - 2, baseline + 3]) {
-        const span = leftInteriorSpanAt(corners, yy);
-        if (!span) { ok = false; break; }
-        L = Math.max(L, span[0]);
-        R = Math.min(R, span[1]);
-      }
-      if (!ok || R - L < 14) continue;
-      // The free horizontal slots in this band: [L,R] minus the x-spans of any
-      // objects whose box overlaps the glyph rows, so the label can sit to the
-      // right of an object rather than dropping a whole band.
+
+    // Free horizontal slots [x0,x1] whose whole glyph band (sampled across rows)
+    // lies inside the outline and clear of objects, for a given baseline.
+    const slotsAt = (baseline) => {
+      const rows = [baseline - 12, baseline - 7, baseline - 2, baseline + 3];
+      let spans = interiorSpansAt(corners, rows[0]);
+      for (let i = 1; i < rows.length && spans.length; i++) spans = clipSpans(spans, interiorSpansAt(corners, rows[i]));
       const ty0 = baseline - 13, ty1 = baseline + 4;
-      const blocks = (objRects || [])
-        .filter((o) => o.y0 < ty1 && o.y1 > ty0 && o.x1 > L && o.x0 < R)
-        .map((o) => [Math.max(L, o.x0), Math.min(R, o.x1)])
-        .sort((a, b) => a[0] - b[0]);
+      const blocks = (objRects || []).filter((o) => o.y0 < ty1 && o.y1 > ty0).map((o) => [o.x0, o.x1]);
       const free = [];
-      let cur = L + pad;
-      for (const [bx0, bx1] of blocks) {
-        if (bx0 - pad > cur) free.push([cur, bx0 - pad]);
-        cur = Math.max(cur, bx1 + pad);
+      for (let [L, R] of spans) {
+        L += pad; R -= pad;
+        if (R - L < 14) continue;
+        const bs = blocks.filter((b) => b[1] > L && b[0] < R)
+          .map((b) => [Math.max(L, b[0]), Math.min(R, b[1])]).sort((a, b) => a[0] - b[0]);
+        let cur = L;
+        for (const [bx0, bx1] of bs) { if (bx0 - pad > cur) free.push([cur, bx0 - pad]); cur = Math.max(cur, bx1 + pad); }
+        if (R > cur) free.push([cur, R]);
       }
-      if (R - pad > cur) free.push([cur, R - pad]);
-      // Prefer the first slot (highest band, then leftmost) that shows the whole
-      // name; remember the first that fits anything as a fallback.
-      for (const [fx0, fx1] of free) {
-        if (fx1 - fx0 < 14) continue;
-        const text = fitLabel(name, fx1 - fx0, 15, 700, 2);
-        if (!text) continue;
-        const place = { x: fx0, y: baseline, text };
-        if (!fallback) fallback = place;
-        if (!text.includes("…")) return place;
+      return free;
+    };
+
+    const bands = [];
+    for (let dy = 21; dy <= maxY - minY - 3; dy += 12) bands.push(minY + dy);
+
+    const combined = extra ? `${name} ${extra}` : name;
+    const wCombined = measureText(combined, size, weight);
+    const wName = measureText(name, size, weight);
+    const wExtra = extra ? measureText(extra, size, weight) : 0;
+    let fallback = null, twoLine = null;
+
+    for (const baseline of bands) {
+      if (baseline > maxY - 3) break;
+      for (const [fx0, fx1] of slotsAt(baseline)) {
+        const w = fx1 - fx0;
+        if (w < 14) continue;
+        // 1) Full label on one line, here — best; take the highest such spot.
+        if (wCombined <= w) return { x: fx0, y: baseline, lines: [combined] };
+        // Last-resort truncated single line (first encountered = highest/leftmost).
+        if (!fallback) {
+          const t = fitLabel(combined, w, size, weight, 2);
+          if (t) fallback = { x: fx0, y: baseline, lines: [t] };
+        }
+        // 2) Two lines: name here, area on the next band, both untruncated.
+        if (!twoLine && extra && wName <= w && wExtra <= w) {
+          const b2 = baseline + lineH;
+          if (b2 <= maxY - 3 && slotsAt(b2).some(([a, b]) => a <= fx0 + 0.5 && b >= fx0 + wExtra - 0.5)) {
+            twoLine = { x: fx0, y: baseline, lines: [name, extra] };
+          }
+        }
       }
     }
-    return fallback;
+    return twoLine || fallback;
   }
 
   // Resolve where each opening sits along a wall (cm from the wall's start
@@ -694,11 +717,6 @@
     return Math.abs(a) / 2 / 10000; // cm² -> m²
   }
 
-  // The room's display label: name, plus its area in m² when the Area toggle is on.
-  function roomLabelText(room) {
-    return ui.area ? `${room.name} (${roomAreaM2(room).toFixed(1)} m²)` : room.name;
-  }
-
   function drawRoom(room) {
     const sel = selection && selection.kind === "room" && selection.roomId === room.id;
     const geo = itemGeometry(room, room, 0);
@@ -715,16 +733,22 @@
       })
     );
 
-    // Room name — tucked into the top-left interior, cut-out/zoom aware, and
-    // nudged to a lower band when it would land on top of a room object.
+    // Room name (+ area, optionally wrapped to a second line) — placed in the
+    // best truncation-free interior spot, cut-out/zoom/object aware.
     const objRects = (room.objects || []).map((o) => {
       const c = itemGeometry(room, o, o.rot || 0).corners;
       const xs = c.map((p) => p[0]), oys = c.map((p) => p[1]);
       return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...oys), y1: Math.max(...oys) };
     });
-    const place = roomLabelPlacement(geo.corners, roomLabelText(room), objRects);
+    const areaStr = ui.area ? `(${roomAreaM2(room).toFixed(1)} m²)` : null;
+    const place = roomLabelPlacement(geo.corners, room.name, objRects, areaStr);
     if (place) {
-      g.appendChild(textLabel(place.x, place.y, place.text, { weight: 700, size: 15, fill: "#1f2933" }));
+      const t = svgEl("text", {
+        "font-size": 15, "font-weight": 700, fill: "#1f2933",
+        "font-family": "system-ui, sans-serif", style: "pointer-events:none; user-select:none",
+      });
+      place.lines.forEach((ln, i) => t.appendChild(svgEl("tspan", { x: place.x, y: place.y + i * 15 * 1.2 }, ln)));
+      g.appendChild(t);
     }
 
     drawOpenings(g, room);
