@@ -224,14 +224,50 @@
       };
     }
 
-    const edges = [];
+    let edges = [];
     for (const side of ["top", "right", "bottom", "left"]) {
       const S = SIDES[side];
       const baseCtl = S.base === "w" ? setW(item) : setH(item);
       const onSide = notches.filter((n) => n.side === side);
       edges.push(...walkEdge(S.start(item), S.dir, S.len(item), onSide, baseCtl));
     }
+    edges = removeSpikes(edges);
     return { points: edges.map((e) => e.a), edges };
+  }
+
+  // A notch flush with a corner makes a wall's depth edge backtrack over the
+  // neighbouring wall — a 180° "spike" (e.g. a cut-in 0 cm from the corner draws
+  // a zero-width line into the corner). Merge such antiparallel consecutive edge
+  // pairs so the room simply narrows there, keeping the longer edge's editable
+  // control. Cut-outs at a corner stay collinear (an extension), not a spike.
+  function removeSpikes(edges) {
+    const dir = (e) => {
+      const dx = e.b[0] - e.a[0], dy = e.b[1] - e.a[1], m = Math.hypot(dx, dy) || 1;
+      return [dx / m, dy / m];
+    };
+    let merged = true;
+    while (merged && edges.length > 3) {
+      merged = false;
+      const n = edges.length;
+      for (let i = 0; i < n; i++) {
+        const a = edges[i], b = edges[(i + 1) % n];
+        const da = dir(a), db = dir(b);
+        if (da[0] * db[0] + da[1] * db[1] < -0.999) {
+          const len = Math.hypot(b.b[0] - a.a[0], b.b[1] - a.a[1]);
+          const m = { a: a.a, b: b.b, len, ctl: a.len >= b.len ? a.ctl : b.ctl };
+          const next = [];
+          for (let k = 0; k < n; k++) {
+            if (k === i) next.push(m);
+            else if (k === (i + 1) % n) continue;
+            else next.push(edges[k]);
+          }
+          edges = len < 0.01 ? next.filter((e) => e !== m) : next;
+          merged = true;
+          break;
+        }
+      }
+    }
+    return edges;
   }
 
   // Resolve a selection into the live objects it points at.
