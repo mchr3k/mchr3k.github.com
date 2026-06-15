@@ -561,7 +561,7 @@
         const a = clamp(p.start, 0, seg.len), b = clamp(p.end, 0, seg.len);
         if (b - a < 0.5) continue;
         const p1 = at(a), p2 = at(b);
-        if (p.type === "door") drawDoor(g, p1, p2, seg.inward, room.id, p.op.id, p.hinge, p.swing, p.op.frame || 0);
+        if (p.type === "door") drawDoor(g, p1, p2, seg.inward, room.id, p.op.id, p.hinge, p.swing, p.op.frame || 0, (p.op.leaf || "yes") !== "no");
         else drawWindow(g, p1, p2, seg.inward, room.id, p.op.id);
         // While dragging this opening, show the clear gap on each side.
         if (drag && drag.type === "opening" && drag.op === p.op) {
@@ -618,7 +618,7 @@
     return s;
   }
 
-  function drawDoor(g, p1, p2, inward, roomId, opId, hinge, swing, frameCm) {
+  function drawDoor(g, p1, p2, inward, roomId, opId, hinge, swing, frameCm, hasLeaf) {
     const fullPx = dist(p1, p2) || 1;
     // Frame width per side in screen px, capped so a leaf always remains.
     const fpx = Math.min(Math.max(0, (frameCm || 0) * view.scale), fullPx * 0.45);
@@ -640,12 +640,16 @@
       eg.appendChild(svgEl("line", { x1: p1[0], y1: p1[1], x2: j1[0], y2: j1[1], stroke: "#475569", "stroke-width": 4, "stroke-linecap": "butt", style: "pointer-events:none" }));
       eg.appendChild(svgEl("line", { x1: p2[0], y1: p2[1], x2: j2[0], y2: j2[1], stroke: "#475569", "stroke-width": 4, "stroke-linecap": "butt", style: "pointer-events:none" }));
     }
-    // Swing arc from the closed (far jamb) to the open (tip) position, centred on the hinge.
-    eg.appendChild(svgEl("path", {
-      d: arcPath(hingePt[0], hingePt[1], r, farPt, tip),
-      fill: "none", stroke: "#64748b", "stroke-width": 1, "stroke-dasharray": "3 3", style: "pointer-events:none",
-    }));
-    eg.appendChild(svgEl("line", { x1: hingePt[0], y1: hingePt[1], x2: tip[0], y2: tip[1], stroke: "#475569", "stroke-width": 2, style: "pointer-events:none" }));
+    // With no leaf it's an open doorway: show the opening (and frame) but no
+    // swing arc or door line.
+    if (hasLeaf) {
+      // Swing arc from the closed (far jamb) to the open (tip) position, centred on the hinge.
+      eg.appendChild(svgEl("path", {
+        d: arcPath(hingePt[0], hingePt[1], r, farPt, tip),
+        fill: "none", stroke: "#64748b", "stroke-width": 1, "stroke-dasharray": "3 3", style: "pointer-events:none",
+      }));
+      eg.appendChild(svgEl("line", { x1: hingePt[0], y1: hingePt[1], x2: tip[0], y2: tip[1], stroke: "#475569", "stroke-width": 2, style: "pointer-events:none" }));
+    }
     g.appendChild(eg);
   }
 
@@ -1573,11 +1577,11 @@
       openingField(o, "width", "Width (cm)", "number")
     );
     if (o.type === "door") {
-      grid.append(
-        openingField(o, "hinge", "Hinge", "hinge"),
-        openingField(o, "swing", "Swing", "swing"),
-        openingField(o, "frame", "Frame each side (cm)", "number")
-      );
+      grid.append(openingField(o, "leaf", "Leaf", "leaf"));
+      if ((o.leaf || "yes") !== "no") {
+        grid.append(openingField(o, "hinge", "Hinge", "hinge"), openingField(o, "swing", "Swing", "swing"));
+      }
+      grid.append(openingField(o, "frame", "Frame each side (cm)", "number"));
     }
     li.append(head, grid);
     return li;
@@ -1638,15 +1642,17 @@
     const span = document.createElement("span");
     span.textContent = label;
     let input;
-    if (type === "select" || type === "type" || type === "hinge" || type === "swing") {
+    if (type === "select" || type === "type" || type === "hinge" || type === "swing" || type === "leaf") {
       input = document.createElement("select");
       const labels = type === "type" ? { door: "Door", window: "Window" }
         : type === "hinge" ? { start: "Wall start", end: "Wall end" }
         : type === "swing" ? { out: "Outward", in: "Inward" }
+        : type === "leaf" ? { yes: "Door", no: "Open (no door)" }
         : SIDE_LABELS;
       const opts = type === "type" ? ["door", "window"]
         : type === "hinge" ? ["start", "end"]
         : type === "swing" ? ["out", "in"]
+        : type === "leaf" ? ["yes", "no"]
         : ["top", "right", "bottom", "left"];
       for (const s of opts) {
         const opt = document.createElement("option");
@@ -1684,7 +1690,7 @@
     const room = r.room;
     if (!room.openings) room.openings = [];
     const lastSide = room.openings.length ? room.openings[room.openings.length - 1].side : "top";
-    room.openings.push({ id: uid("op"), type, side: lastSide, notch: null, hinge: "start", swing: "out", gap: 50, width: type === "door" ? 80 : 120, frame: 0 });
+    room.openings.push({ id: uid("op"), type, side: lastSide, notch: null, hinge: "start", swing: "out", leaf: "yes", gap: 50, width: type === "door" ? 80 : 120, frame: 0 });
     save();
     render();
     refreshPanel();
@@ -2108,6 +2114,9 @@
           notchEdge: ["side1", "side2"].includes(o.notchEdge) ? o.notchEdge : "face",
           hinge: o.hinge === "end" ? "end" : "start",
           swing: o.swing === "in" ? "in" : "out",
+          // "no" = an open doorway: the opening (and any frame) still shows, but
+          // there's no leaf or swing arc.
+          leaf: o.leaf === "no" ? "no" : "yes",
           gap: Math.max(0, Math.round(+o.gap || 0)),
           width: Math.max(1, Math.round(+o.width || 80)),
           // Door frame width on *each* side: stays marked on the wall as part of
