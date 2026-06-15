@@ -34,9 +34,9 @@
   let state;
   // View transform: screen_px = world_cm * scale + offset
   let view = { scale: 0.45, ox: 70, oy: 70 };
-  let ui = { grid: true, snap: true, edges: true, area: false, gridCm: 10 };
-  // The Edge lengths / Grid / Snap / Area toggles persist per device. Loaded into
-  // `ui` before the first render, then mirrored onto the checkboxes.
+  let ui = { grid: true, snap: true, roomEdges: true, objEdges: true, objects: true, area: false, gridCm: 10 };
+  // The toolbar toggles persist per device. Loaded into `ui` before the first
+  // render, then mirrored onto the checkboxes.
   const UI_PREFS_KEY = "floorplan.uiprefs.v1";
   function loadUiPrefs() {
     try {
@@ -44,18 +44,26 @@
       if (p && typeof p === "object") {
         if (typeof p.grid === "boolean") ui.grid = p.grid;
         if (typeof p.snap === "boolean") ui.snap = p.snap;
-        if (typeof p.edges === "boolean") ui.edges = p.edges;
+        // Migrate the old single "edges" pref to the split room/object toggles.
+        if (typeof p.edges === "boolean") { ui.roomEdges = p.edges; ui.objEdges = p.edges; }
+        if (typeof p.roomEdges === "boolean") ui.roomEdges = p.roomEdges;
+        if (typeof p.objEdges === "boolean") ui.objEdges = p.objEdges;
+        if (typeof p.objects === "boolean") ui.objects = p.objects;
         if (typeof p.area === "boolean") ui.area = p.area;
       }
     } catch (_) {}
   }
   function saveUiPrefs() {
     try {
-      localStorage.setItem(UI_PREFS_KEY, JSON.stringify({ grid: ui.grid, snap: ui.snap, edges: ui.edges, area: ui.area }));
+      localStorage.setItem(UI_PREFS_KEY, JSON.stringify({
+        grid: ui.grid, snap: ui.snap, roomEdges: ui.roomEdges, objEdges: ui.objEdges, objects: ui.objects, area: ui.area,
+      }));
     } catch (_) {}
   }
   function syncUiControls() {
-    el("chk-edges").checked = ui.edges;
+    el("chk-room-edges").checked = ui.roomEdges;
+    el("chk-obj-edges").checked = ui.objEdges;
+    el("chk-objects").checked = ui.objects;
     el("chk-grid").checked = ui.grid;
     el("chk-snap").checked = ui.snap;
     el("chk-area").checked = ui.area;
@@ -291,7 +299,7 @@
     labelCandidates = [];
     for (const room of state.rooms) {
       drawRoom(room);
-      for (const obj of room.objects) drawObject(room, obj);
+      if (ui.objects) for (const obj of room.objects) drawObject(room, obj);
     }
     // Edge labels go in a single top layer so they sit above every shape and
     // their overlaps can be resolved globally.
@@ -735,11 +743,11 @@
 
     // Room name (+ area, optionally wrapped to a second line) — placed in the
     // best truncation-free interior spot, cut-out/zoom/object aware.
-    const objRects = (room.objects || []).map((o) => {
+    const objRects = ui.objects ? (room.objects || []).map((o) => {
       const c = itemGeometry(room, o, o.rot || 0).corners;
       const xs = c.map((p) => p[0]), oys = c.map((p) => p[1]);
       return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...oys), y1: Math.max(...oys) };
-    });
+    }) : [];
     const areaStr = ui.area ? `(${roomAreaM2(room).toFixed(1)} m²)` : null;
     const place = roomLabelPlacement(geo.corners, room.name, objRects, areaStr);
     if (place) {
@@ -996,7 +1004,7 @@
   // object and edge label. Null when no drag is active.
   let dragLayer = null;
   function collectEdgeLabels(geo, roomId, objId, selected, tint) {
-    if (!ui.edges) return;
+    if (objId == null ? !ui.roomEdges : !ui.objEdges) return;
     for (const e of geo.edges) {
       const [lx, ly] = e.labelScreen;
       const txt = `${round(e.len)} cm`;
@@ -3141,7 +3149,9 @@
     else if (v !== "__current") zoomTo(+v / 100);
     e.target.blur();
   });
-  el("chk-edges").addEventListener("change", (e) => { ui.edges = e.target.checked; saveUiPrefs(); render(); });
+  el("chk-room-edges").addEventListener("change", (e) => { ui.roomEdges = e.target.checked; saveUiPrefs(); render(); });
+  el("chk-obj-edges").addEventListener("change", (e) => { ui.objEdges = e.target.checked; saveUiPrefs(); render(); });
+  el("chk-objects").addEventListener("change", (e) => { ui.objects = e.target.checked; saveUiPrefs(); render(); });
   el("chk-grid").addEventListener("change", (e) => { ui.grid = e.target.checked; saveUiPrefs(); render(); });
   el("chk-snap").addEventListener("change", (e) => { ui.snap = e.target.checked; saveUiPrefs(); });
   el("chk-area").addEventListener("change", (e) => { ui.area = e.target.checked; saveUiPrefs(); render(); });
