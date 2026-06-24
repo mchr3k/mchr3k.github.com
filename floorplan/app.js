@@ -881,7 +881,31 @@
     refreshPanel();
   }
 
-  // Cast the laser ray and return { from, to (world cm), cm, room } or null.
+  // Subtract a union of [lo,hi] "holes" from a union of [lo,hi] "base" intervals.
+  function subtractIntervals(base, holes) {
+    if (!holes.length) return base.slice();
+    const hs = holes.slice().sort((a, b) => a[0] - b[0]);
+    const out = [];
+    for (const [lo, hi] of base) {
+      let segs = [[lo, hi]];
+      for (const [h0, h1] of hs) {
+        const next = [];
+        for (const [s0, s1] of segs) {
+          if (h1 <= s0 || h0 >= s1) { next.push([s0, s1]); continue; }
+          if (h0 > s0) next.push([s0, Math.min(h0, s1)]);
+          if (h1 < s1) next.push([Math.max(h1, s0), s1]);
+        }
+        segs = next;
+      }
+      for (const s of segs) if (s[1] - s[0] > 0.01) out.push(s);
+    }
+    return out.sort((a, b) => a[0] - b[0]);
+  }
+
+  // Cast the laser ray and return { from, to (world cm), cm, room } or null. The
+  // free space along the axis is the room interior minus any counted objects; if
+  // the tool sits inside an object (or a wall) it measures from the nearest free
+  // edge rather than through the solid interior.
   function measureLaser() {
     if (!laser) return null;
     const room = state.rooms.find((r) => roomContainsPoint(r, laser.x, laser.y));
@@ -889,32 +913,37 @@
     const horiz = laser.axis === "h";
     const lx = laser.x - room.x, ly = laser.y - room.y; // local cm
     const poly = itemLocalGeometry(room).points;
-    let bounds = horiz ? polyCrossingsX(poly, ly) : polyCrossingsY(poly, lx);
+    const perp = horiz ? ly : lx;
+    const cross = (horiz ? polyCrossingsX(poly, ly) : polyCrossingsY(poly, lx)).filter(isFinite).sort((a, b) => a - b);
+    const roomIntervals = [];
+    for (let i = 0; i + 1 < cross.length; i += 2) roomIntervals.push([cross[i], cross[i + 1]]);
+    const objIntervals = [];
     if (laser.target === "objects") {
       for (const o of room.objects || []) {
         const a = objAABBAt(o, o.x, o.y);
-        if (horiz) { if (a.top < ly - 0.01 && a.bottom > ly + 0.01) bounds.push(a.left, a.right); }
-        else { if (a.left < lx - 0.01 && a.right > lx + 0.01) bounds.push(a.top, a.bottom); }
+        if (horiz) { if (a.top < perp && a.bottom > perp) objIntervals.push([a.left, a.right]); }
+        else { if (a.left < perp && a.right > perp) objIntervals.push([a.top, a.bottom]); }
       }
     }
-    bounds = bounds.filter((v) => isFinite(v)).sort((p, q) => p - q);
+    const free = subtractIntervals(roomIntervals, objIntervals);
+    if (!free.length) return null;
     const pos = horiz ? lx : ly;
+    const inside = free.find(([f0, f1]) => pos > f0 + 0.01 && pos < f1 - 0.01);
     let lo, hi;
-    if (laser.mode === "tool") {
-      if (laser.dir > 0) {
-        const ahead = bounds.filter((v) => v > pos + 0.01);
-        if (!ahead.length) return null;
-        lo = pos; hi = Math.min(...ahead);
-      } else {
-        const behind = bounds.filter((v) => v < pos - 0.01);
-        if (!behind.length) return null;
-        lo = Math.max(...behind); hi = pos;
-      }
+    if (inside) {
+      if (laser.mode === "tool") {
+        if (laser.dir > 0) { lo = pos; hi = inside[1]; }
+        else { lo = inside[0]; hi = pos; }
+      } else { lo = inside[0]; hi = inside[1]; }
     } else {
-      const behind = bounds.filter((v) => v < pos - 0.01);
-      const ahead = bounds.filter((v) => v > pos + 0.01);
-      if (!behind.length || !ahead.length) return null;
-      lo = Math.max(...behind); hi = Math.min(...ahead);
+      // Tool sits inside an object/wall: measure the nearest free span, in the
+      // aimed direction for "from tool", or the closest one for a full span.
+      let iv = null;
+      if (laser.mode === "tool" && laser.dir > 0) iv = free.filter(([f0]) => f0 >= pos - 0.01).sort((a, b) => a[0] - b[0])[0];
+      else if (laser.mode === "tool") iv = free.filter(([, f1]) => f1 <= pos + 0.01).sort((a, b) => b[1] - a[1])[0];
+      else { let best = Infinity; for (const f of free) { const d = Math.min(Math.abs(f[0] - pos), Math.abs(f[1] - pos)); if (d < best) { best = d; iv = f; } } }
+      if (!iv) return null;
+      lo = iv[0]; hi = iv[1];
     }
     if (hi - lo < 0.5) return null;
     const from = horiz ? [room.x + lo, room.y + ly] : [room.x + lx, room.y + lo];
@@ -933,6 +962,7 @@
 
   function drawLaser() {
     const g = svgEl("g", { class: "laser" });
+    const [tsx, tsy] = worldToScreen(laser.x, laser.y);
     const m = measureLaser();
     if (m) {
       const [ax, ay] = worldToScreen(m.from[0], m.from[1]);
@@ -944,18 +974,21 @@
       }));
       g.appendChild(svgEl("line", { x1: ax, y1: ay, x2: bx, y2: by, stroke: "#dc2626", "stroke-width": 2, style: "pointer-events:none" }));
       tick(ax, ay); tick(bx, by);
-      drawMeasureLabel(g, (ax + bx) / 2, (ay + by) / 2, m.cm);
+      drawMeasureLabel(g, (ax + bx) / 2, (ay + by) / 2, m.cm, [tsx, tsy], horiz);
     }
-    const [tsx, tsy] = worldToScreen(laser.x, laser.y);
     g.appendChild(svgEl("line", { x1: tsx - 11, y1: tsy, x2: tsx + 11, y2: tsy, stroke: "#dc2626", "stroke-width": 1, style: "pointer-events:none" }));
     g.appendChild(svgEl("line", { x1: tsx, y1: tsy - 11, x2: tsx, y2: tsy + 11, stroke: "#dc2626", "stroke-width": 1, style: "pointer-events:none" }));
     g.appendChild(svgEl("circle", { cx: tsx, cy: tsy, r: 8, fill: "#dc2626", "fill-opacity": 0.18, stroke: "#dc2626", "stroke-width": 2, "data-kind": "laser", style: "cursor:move" }));
     svg.appendChild(g);
   }
 
-  function drawMeasureLabel(g, x, y, cm) {
+  function drawMeasureLabel(g, x, y, cm, avoid, horiz) {
     const txt = cm + " cm";
     const wpx = measureText(txt, 12, 600) + 12;
+    // Nudge the label off the measurement line if it would cover the crosshair.
+    if (avoid && Math.abs(x - avoid[0]) < wpx / 2 + 11 && Math.abs(y - avoid[1]) < 22) {
+      if (horiz) y = avoid[1] - 24; else x = avoid[0] + wpx / 2 + 16;
+    }
     g.appendChild(svgEl("rect", { x: x - wpx / 2, y: y - 10, width: wpx, height: 20, rx: 5, fill: "#fee2e2", "fill-opacity": 0.97, stroke: "#dc2626", "stroke-width": 1, style: "pointer-events:none" }));
     g.appendChild(svgEl("text", { x, y: y + 4, "font-size": 12, "font-weight": 600, "text-anchor": "middle", fill: "#991b1b", "font-family": "system-ui, sans-serif", style: "pointer-events:none" }, txt));
   }
@@ -1252,16 +1285,18 @@
       return;
     }
 
-    // Laser mode: a single pointer places/drags the laser tool (two fingers
-    // still pinch-zoom, handled above).
+    // Laser mode: grabbing the crosshair drags the laser; dragging elsewhere
+    // pans the view, and a tap on empty space drops the laser there. (Two
+    // fingers still pinch-zoom, handled above.)
     if (laser) {
-      try { svg.setPointerCapture(e.pointerId); } catch (_) {}
       const [mx, my] = mousePos(e);
-      const [wx, wy] = screenToWorld(mx, my);
-      laser.x = Math.round(wx); laser.y = Math.round(wy);
-      drag = { type: "laser" };
-      render();
-      el("laser-readout").textContent = laserReadout();
+      const [tsx, tsy] = worldToScreen(laser.x, laser.y);
+      try { svg.setPointerCapture(e.pointerId); } catch (_) {}
+      if (Math.hypot(mx - tsx, my - tsy) <= 14) {
+        drag = { type: "laser" };
+      } else {
+        drag = { type: "pan", startOx: view.ox, startOy: view.oy, startMx: mx, startMy: my, placeLaser: true };
+      }
       return;
     }
 
@@ -1439,9 +1474,17 @@
     drag = null; // cleared first so the final render drops live guides/clearances
     if (d) {
       if (d.type === "pan") {
+        // A tap (no pan) in laser mode drops the laser at that point.
+        if (d.placeLaser && laser && !d.moved) {
+          const [mx, my] = mousePos(e);
+          const [wx, wy] = screenToWorld(mx, my);
+          laser.x = Math.round(wx); laser.y = Math.round(wy);
+          render();
+          el("laser-readout").textContent = laserReadout();
+        }
         // Panning doesn't mutate content. A locked tap (no pan) on the already-
         // selected item deselects it.
-        if (!d.moved && d.lockSel && d.wasSelected) select(null);
+        else if (!d.moved && d.lockSel && d.wasSelected) select(null);
       } else if (d.moved) {
         // Dropping an object inside a different room re-parents it there.
         if (d.type === "object") {
