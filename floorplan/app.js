@@ -70,6 +70,12 @@
   }
   /** @type {{kind:'room'|'object', roomId:string, objId?:string}|null} */
   let selection = null;
+  // Laser-measure tool. When non-null the app is in laser mode: edge labels are
+  // hidden and a draggable "laser" casts a horizontal/vertical ray that reads the
+  // distance to the room walls (cut-in/out aware) — optionally stopping at
+  // objects. { x, y } world cm; target 'walls'|'objects'; axis 'h'|'v';
+  // dir 1 (forwards) | -1 (backwards); mode 'span' (side-to-side) | 'tool'.
+  let laser = null;
   // When locked, the canvas is view/select-only: dragging pans and edge labels
   // just select, so nothing can be moved or edited by accident. Pan/zoom and the
   // side panel still work. Defaults on per device (set in boot()).
@@ -347,6 +353,7 @@
     // The drag overlay goes above even the edge labels so it's always visible.
     if (dragLayer && dragLayer.childNodes.length) svg.appendChild(dragLayer);
     dragLayer = null;
+    if (laser) drawLaser();
     updateZoomSelect();
   }
 
@@ -858,6 +865,101 @@
     return ys;
   }
 
+  // ---------------------------------------------------------------------------
+  // Laser measure
+  // ---------------------------------------------------------------------------
+  function toggleLaser() {
+    if (laser) {
+      laser = null;
+    } else {
+      selection = null;
+      const [cx, cy] = screenToWorld(wrap.clientWidth / 2, wrap.clientHeight / 2);
+      laser = { x: Math.round(cx), y: Math.round(cy), target: "walls", axis: "h", dir: 1, mode: "span" };
+    }
+    el("btn-laser").classList.toggle("active", !!laser);
+    render();
+    refreshPanel();
+  }
+
+  // Cast the laser ray and return { from, to (world cm), cm, room } or null.
+  function measureLaser() {
+    if (!laser) return null;
+    const room = state.rooms.find((r) => roomContainsPoint(r, laser.x, laser.y));
+    if (!room) return null;
+    const horiz = laser.axis === "h";
+    const lx = laser.x - room.x, ly = laser.y - room.y; // local cm
+    const poly = itemLocalGeometry(room).points;
+    let bounds = horiz ? polyCrossingsX(poly, ly) : polyCrossingsY(poly, lx);
+    if (laser.target === "objects") {
+      for (const o of room.objects || []) {
+        const a = objAABBAt(o, o.x, o.y);
+        if (horiz) { if (a.top < ly - 0.01 && a.bottom > ly + 0.01) bounds.push(a.left, a.right); }
+        else { if (a.left < lx - 0.01 && a.right > lx + 0.01) bounds.push(a.top, a.bottom); }
+      }
+    }
+    bounds = bounds.filter((v) => isFinite(v)).sort((p, q) => p - q);
+    const pos = horiz ? lx : ly;
+    let lo, hi;
+    if (laser.mode === "tool") {
+      if (laser.dir > 0) {
+        const ahead = bounds.filter((v) => v > pos + 0.01);
+        if (!ahead.length) return null;
+        lo = pos; hi = Math.min(...ahead);
+      } else {
+        const behind = bounds.filter((v) => v < pos - 0.01);
+        if (!behind.length) return null;
+        lo = Math.max(...behind); hi = pos;
+      }
+    } else {
+      const behind = bounds.filter((v) => v < pos - 0.01);
+      const ahead = bounds.filter((v) => v > pos + 0.01);
+      if (!behind.length || !ahead.length) return null;
+      lo = Math.max(...behind); hi = Math.min(...ahead);
+    }
+    if (hi - lo < 0.5) return null;
+    const from = horiz ? [room.x + lo, room.y + ly] : [room.x + lx, room.y + lo];
+    const to = horiz ? [room.x + hi, room.y + ly] : [room.x + lx, room.y + hi];
+    return { from, to, cm: Math.round(hi - lo), room };
+  }
+
+  function laserReadout() {
+    if (!laser) return "";
+    const m = measureLaser();
+    if (!m) return laser.mode === "tool"
+      ? "No wall ahead — place the tool in a room and aim into it."
+      : "Place the tool inside a room.";
+    return `${m.cm} cm  ·  ${(m.cm / 100).toFixed(2)} m`;
+  }
+
+  function drawLaser() {
+    const g = svgEl("g", { class: "laser" });
+    const m = measureLaser();
+    if (m) {
+      const [ax, ay] = worldToScreen(m.from[0], m.from[1]);
+      const [bx, by] = worldToScreen(m.to[0], m.to[1]);
+      const horiz = laser.axis === "h";
+      const tick = (x, y) => g.appendChild(svgEl("line", {
+        x1: horiz ? x : x - 6, y1: horiz ? y - 6 : y, x2: horiz ? x : x + 6, y2: horiz ? y + 6 : y,
+        stroke: "#dc2626", "stroke-width": 2, style: "pointer-events:none",
+      }));
+      g.appendChild(svgEl("line", { x1: ax, y1: ay, x2: bx, y2: by, stroke: "#dc2626", "stroke-width": 2, style: "pointer-events:none" }));
+      tick(ax, ay); tick(bx, by);
+      drawMeasureLabel(g, (ax + bx) / 2, (ay + by) / 2, m.cm);
+    }
+    const [tsx, tsy] = worldToScreen(laser.x, laser.y);
+    g.appendChild(svgEl("line", { x1: tsx - 11, y1: tsy, x2: tsx + 11, y2: tsy, stroke: "#dc2626", "stroke-width": 1, style: "pointer-events:none" }));
+    g.appendChild(svgEl("line", { x1: tsx, y1: tsy - 11, x2: tsx, y2: tsy + 11, stroke: "#dc2626", "stroke-width": 1, style: "pointer-events:none" }));
+    g.appendChild(svgEl("circle", { cx: tsx, cy: tsy, r: 8, fill: "#dc2626", "fill-opacity": 0.18, stroke: "#dc2626", "stroke-width": 2, "data-kind": "laser", style: "cursor:move" }));
+    svg.appendChild(g);
+  }
+
+  function drawMeasureLabel(g, x, y, cm) {
+    const txt = cm + " cm";
+    const wpx = measureText(txt, 12, 600) + 12;
+    g.appendChild(svgEl("rect", { x: x - wpx / 2, y: y - 10, width: wpx, height: 20, rx: 5, fill: "#fee2e2", "fill-opacity": 0.97, stroke: "#dc2626", "stroke-width": 1, style: "pointer-events:none" }));
+    g.appendChild(svgEl("text", { x, y: y + 4, "font-size": 12, "font-weight": 600, "text-anchor": "middle", fill: "#991b1b", "font-family": "system-ui, sans-serif", style: "pointer-events:none" }, txt));
+  }
+
   // While dragging an object, show the clear distance from each of its sides to
   // the nearest obstacle on that side — whichever comes first within the side's
   // projected band: another object, or the room wall (following the outline, so
@@ -1040,6 +1142,7 @@
   // object and edge label. Null when no drag is active.
   let dragLayer = null;
   function collectEdgeLabels(geo, roomId, objId, selected, tint) {
+    if (laser) return; // laser mode hides all edge distance labels
     if (objId == null ? !ui.roomEdges : !ui.objEdges) return;
     for (const e of geo.edges) {
       const [lx, ly] = e.labelScreen;
@@ -1146,6 +1249,19 @@
         cx: (pts[0][0] + pts[1][0]) / 2,
         cy: (pts[0][1] + pts[1][1]) / 2,
       };
+      return;
+    }
+
+    // Laser mode: a single pointer places/drags the laser tool (two fingers
+    // still pinch-zoom, handled above).
+    if (laser) {
+      try { svg.setPointerCapture(e.pointerId); } catch (_) {}
+      const [mx, my] = mousePos(e);
+      const [wx, wy] = screenToWorld(mx, my);
+      laser.x = Math.round(wx); laser.y = Math.round(wy);
+      drag = { type: "laser" };
+      render();
+      el("laser-readout").textContent = laserReadout();
       return;
     }
 
@@ -1256,6 +1372,14 @@
 
     if (!drag) return;
     const [mx, my] = mousePos(e);
+
+    if (drag.type === "laser") {
+      const [wx, wy] = screenToWorld(mx, my);
+      laser.x = Math.round(wx); laser.y = Math.round(wy);
+      render();
+      el("laser-readout").textContent = laserReadout();
+      return;
+    }
 
     if (drag.type === "pan") {
       // Below the tap threshold, keep it a tap (so a locked tap can select/
@@ -1450,12 +1574,32 @@
   // Selection + property panel
   // ---------------------------------------------------------------------------
   function select(sel) {
+    // Selecting a real item leaves laser mode (so the panel shows the item).
+    if (laser && sel) { laser = null; el("btn-laser").classList.remove("active"); }
     selection = sel;
     render();
     refreshPanel();
   }
 
   function refreshPanel() {
+    const panelLaser = el("panel-laser");
+    if (laser) {
+      panelEmpty.hidden = true;
+      panelDetails.hidden = true;
+      panelLaser.hidden = false;
+      panel.classList.remove("collapsed");
+      el("laser-target").value = laser.target;
+      el("laser-axis").value = laser.axis;
+      el("laser-dir").value = String(laser.dir);
+      el("laser-mode").value = laser.mode;
+      el("laser-readout").textContent = laserReadout();
+      el("btn-rotate").disabled = true;
+      el("btn-duplicate").disabled = true;
+      el("btn-delete").disabled = true;
+      return;
+    }
+    panelLaser.hidden = true;
+
     const r = resolveSel();
     const hasSel = !!r;
     panelEmpty.hidden = hasSel;
@@ -3172,6 +3316,13 @@
   el("btn-redo").addEventListener("click", redo);
   el("btn-add-room").addEventListener("click", addRoom);
   el("btn-add-object").addEventListener("click", addObject);
+  el("btn-laser").addEventListener("click", toggleLaser);
+  el("btn-laser-done").addEventListener("click", () => { if (laser) toggleLaser(); });
+  const laserSet = (key, val) => { if (laser) { laser[key] = val; render(); el("laser-readout").textContent = laserReadout(); } };
+  el("laser-target").addEventListener("change", (e) => laserSet("target", e.target.value));
+  el("laser-axis").addEventListener("change", (e) => laserSet("axis", e.target.value));
+  el("laser-dir").addEventListener("change", (e) => laserSet("dir", parseInt(e.target.value, 10)));
+  el("laser-mode").addEventListener("change", (e) => laserSet("mode", e.target.value));
   el("btn-rotate").addEventListener("click", rotateSel);
   el("btn-duplicate").addEventListener("click", duplicateSel);
   el("btn-delete").addEventListener("click", deleteSel);
