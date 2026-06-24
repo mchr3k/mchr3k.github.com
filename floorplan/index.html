@@ -35,6 +35,7 @@
       <div class="toolbar-group">
         <button id="btn-add-room" title="Add a new room">+ Room</button>
         <button id="btn-add-object" title="Add an object to the selected room">+ Object</button>
+        <button id="btn-laser" title="Laser measure: cross-check a real laser reading">📏 Laser measure</button>
       </div>
 
       <div class="toolbar-group">
@@ -103,6 +104,51 @@
             <li>Everything is auto-saved in this browser. Use Export to keep a copy.</li>
           </ul>
           <p class="small"><a href="privacy.html" target="_blank" rel="noopener">Privacy policy</a></p>
+        </div>
+
+        <div id="panel-laser" class="panel-section" hidden>
+          <div class="panel-head">
+            <h2>📏 Laser measure</h2>
+            <button id="btn-laser-done" type="button" class="panel-close" title="Exit laser measure">Done ✕</button>
+          </div>
+          <p class="muted small">
+            Drag the laser on the canvas to position it, then read off the distance to
+            cross-check a real laser measurement. Walls account for cut-ins and cut-outs.
+          </p>
+
+          <label class="field">
+            <span>Measure</span>
+            <select id="laser-target">
+              <option value="walls">Between walls</option>
+              <option value="objects">Between walls or objects</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Axis</span>
+            <select id="laser-axis">
+              <option value="h">Horizontal</option>
+              <option value="v">Vertical</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>From</span>
+            <select id="laser-mode">
+              <option value="span">One side to the other</option>
+              <option value="tool">From the tool</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Direction (for “from the tool”)</span>
+            <select id="laser-dir">
+              <option value="1">Forwards</option>
+              <option value="-1">Backwards</option>
+            </select>
+          </label>
+
+          <p id="laser-readout" class="laser-readout"></p>
         </div>
 
         <div id="panel-details" class="panel-section" hidden>

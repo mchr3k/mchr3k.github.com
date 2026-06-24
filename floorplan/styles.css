@@ -154,6 +154,22 @@ button.primary:hover:not(:disabled) {
   color: #b45309;
   background: #fffbeb;
 }
+#btn-laser.active {
+  border-color: var(--danger);
+  color: #fff;
+  background: var(--danger);
+}
+.laser-readout {
+  margin: 12px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  background: #fee2e2;
+  color: #991b1b;
+  font-size: 17px;
+  font-weight: 700;
+  text-align: center;
+}
 
 #canvas {
   display: block;
