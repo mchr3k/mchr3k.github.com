@@ -35,6 +35,7 @@
       <div class="toolbar-group">
         <button id="btn-add-room" title="Add a new room">+ Room</button>
         <button id="btn-add-object" title="Add an object to the selected room">+ Object</button>
+        <button id="btn-add-electric" title="Add a socket / switch to the selected room's wall">+ Electric</button>
         <button id="btn-laser" title="Laser measure: cross-check a real laser reading">📏 Laser measure</button>
       </div>
 
@@ -65,6 +66,7 @@
         <label class="check"><input type="checkbox" id="chk-room-edges" autocomplete="off" checked /> Room lengths</label>
         <label class="check"><input type="checkbox" id="chk-obj-edges" autocomplete="off" checked /> Object lengths</label>
         <label class="check"><input type="checkbox" id="chk-objects" autocomplete="off" checked /> Show objects</label>
+        <label class="check"><input type="checkbox" id="chk-electrics" autocomplete="off" checked /> Electrics</label>
         <label class="check"><input type="checkbox" id="chk-grid" autocomplete="off" checked /> Grid</label>
         <label class="check"><input type="checkbox" id="chk-snap" autocomplete="off" checked /> Snap</label>
         <label class="check"><input type="checkbox" id="chk-area" autocomplete="off" /> Area</label>
@@ -149,6 +151,37 @@
           </label>
 
           <p id="laser-readout" class="laser-readout"></p>
+        </div>
+
+        <div id="panel-electric" class="panel-section" hidden>
+          <div class="panel-head">
+            <h2>Electric</h2>
+            <button id="btn-electric-done" type="button" class="panel-close" title="Deselect (Esc)" aria-label="Deselect">Done ✕</button>
+          </div>
+          <p class="muted small">
+            Drag it along the room's walls (around corners too). It always sits flat on the wall.
+          </p>
+          <label class="field">
+            <span>Type</span>
+            <select id="electric-kind">
+              <option value="socket">Plug socket</option>
+              <option value="switch">Light switch</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Gang</span>
+            <select id="electric-size">
+              <option value="single">Single</option>
+              <option value="double">Double</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Face</span>
+            <select id="electric-face">
+              <option value="in">Into the room</option>
+              <option value="out">External wall face</option>
+            </select>
+          </label>
         </div>
 
         <div id="panel-details" class="panel-section" hidden>
