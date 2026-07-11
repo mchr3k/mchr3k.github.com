@@ -346,6 +346,7 @@
     // Overlay for the dragged item + its temporary labels; appended last below.
     dragLayer = drag ? svgEl("g", { class: "drag-overlay", style: "pointer-events:none" }) : null;
 
+    sharedDoorSpans = doorWorldSpans();
     labelCandidates = [];
     for (const room of state.rooms) {
       drawRoom(room);
@@ -666,6 +667,59 @@
     }
   }
 
+  // World-space clear-opening spans of every door, used to open a neighbouring
+  // room's coincident wall so a door on a shared wall reads as a doorway between
+  // the two rooms. Recomputed each render into `sharedDoorSpans`.
+  function doorWorldSpans() {
+    const spans = [];
+    for (const room of state.rooms) {
+      if (!(room.openings || []).length) continue;
+      for (const seg of roomSegments(room)) {
+        for (const p of layoutSegment(seg)) {
+          if (p.type !== "door") continue;
+          let a = clamp(p.start, 0, seg.len), b = clamp(p.end, 0, seg.len);
+          const f = Math.min(p.op.frame || 0, (b - a) * 0.45); // clear opening = width - 2*frame
+          a += f; b -= f;
+          if (b - a < 0.5) continue;
+          spans.push({
+            room,
+            x1: room.x + seg.sx + seg.dir[0] * a, y1: room.y + seg.sy + seg.dir[1] * a,
+            x2: room.x + seg.sx + seg.dir[0] * b, y2: room.y + seg.sy + seg.dir[1] * b,
+          });
+        }
+      }
+    }
+    return spans;
+  }
+
+  // Open this room's walls where another room's door lies on the same (shared)
+  // wall line, so the doorway shows through both walls.
+  function drawSharedDoorMasks(g, room) {
+    for (const seg of roomSegments(room)) {
+      const sx1 = room.x + seg.sx, sy1 = room.y + seg.sy;
+      const sx2 = sx1 + seg.dir[0] * seg.len, sy2 = sy1 + seg.dir[1] * seg.len;
+      const vert = Math.abs(seg.dir[0]) < 0.01;
+      for (const d of sharedDoorSpans) {
+        if (d.room === room) continue;
+        const dvert = Math.abs(d.x2 - d.x1) < 0.01;
+        if (dvert !== vert) continue;
+        if (vert) {
+          if (Math.abs(d.x1 - sx1) > 1) continue; // same vertical wall line
+          const lo = Math.max(Math.min(sy1, sy2), Math.min(d.y1, d.y2));
+          const hi = Math.min(Math.max(sy1, sy2), Math.max(d.y1, d.y2));
+          if (hi - lo < 0.5) continue;
+          maskWall(g, worldToScreen(sx1, lo), worldToScreen(sx1, hi));
+        } else {
+          if (Math.abs(d.y1 - sy1) > 1) continue; // same horizontal wall line
+          const lo = Math.max(Math.min(sx1, sx2), Math.min(d.x1, d.x2));
+          const hi = Math.min(Math.max(sx1, sx2), Math.max(d.x1, d.x2));
+          if (hi - lo < 0.5) continue;
+          maskWall(g, worldToScreen(lo, sy1), worldToScreen(hi, sy1));
+        }
+      }
+    }
+  }
+
   function drawGapLabel(g, at, inward, m0, m1) {
     const gap = Math.round(m1 - m0);
     if (gap < 1) return;
@@ -810,10 +864,15 @@
       g.appendChild(t);
     }
 
+    drawSharedDoorMasks(g, room); // open walls shared with a neighbour room's door
     drawOpenings(g, room);
     if (ui.electrics) drawElectrics(g, room);
     collectEdgeLabels(geo, room.id, null, sel, room.color);
     if (sel) drawHandles(g, geo);
+    // Room-edge snap guides while dragging this room.
+    if (drag && drag.type === "room" && drag.room === room && drag.snapGuides) {
+      drawRoomSnapGuides(dragLayer || g, drag.snapGuides);
+    }
     svg.appendChild(g);
   }
 
@@ -1175,6 +1234,38 @@
     if (guides.y != null) line(at(0, guides.y), at(room.w, guides.y));
   }
 
+  // Snap a dragged room's bounding edges to any other room's edges (grid-
+  // independent), so rooms sit flush against each other. Returns {x,y,guides}
+  // where guides.x / guides.y are the matched world coordinates.
+  function snapRoomEdges(room, nx, ny) {
+    const thr = 10 / view.scale;
+    const xT = [], yT = [];
+    for (const o of state.rooms) {
+      if (o.id === room.id) continue;
+      xT.push(o.x, o.x + o.w);
+      yT.push(o.y, o.y + o.h);
+    }
+    const guides = {};
+    let bx = nx, bdx = thr;
+    for (const edge of [nx, nx + room.w]) {
+      for (const t of xT) { const d = Math.abs(edge - t); if (d < bdx) { bdx = d; bx = nx + (t - edge); guides.x = t; } }
+    }
+    let by = ny, bdy = thr;
+    for (const edge of [ny, ny + room.h]) {
+      for (const t of yT) { const d = Math.abs(edge - t); if (d < bdy) { bdy = d; by = ny + (t - edge); guides.y = t; } }
+    }
+    return { x: Math.round(bx), y: Math.round(by), guides };
+  }
+
+  // Room snap guides are in world coordinates (they align two different rooms),
+  // so draw full-canvas dashed lines at the matched world x / y.
+  function drawRoomSnapGuides(g, guides) {
+    const W = wrap.clientWidth, H = wrap.clientHeight;
+    const line = (x1, y1, x2, y2) => g.appendChild(svgEl("line", { x1, y1, x2, y2, stroke: "#db2777", "stroke-width": 1, "stroke-dasharray": "4 3", style: "pointer-events:none" }));
+    if (guides.x != null) { const [sx] = worldToScreen(guides.x, 0); line(sx, 0, sx, H); }
+    if (guides.y != null) { const [, sy] = worldToScreen(0, guides.y); line(0, sy, W, sy); }
+  }
+
   // Is a world point inside a room's outline (accounting for cut-ins/outs)?
   function roomContainsPoint(room, wx, wy) {
     const poly = itemLocalGeometry(room).points;
@@ -1268,6 +1359,9 @@
   // routed into this overlay group, appended last so they sit above every room,
   // object and edge label. Null when no drag is active.
   let dragLayer = null;
+  // World-space door spans for cross-room (shared-wall) doorways, refreshed once
+  // per render.
+  let sharedDoorSpans = [];
   function collectEdgeLabels(geo, roomId, objId, selected, tint) {
     if (laser) return; // laser mode hides all edge distance labels
     if (objId == null ? !ui.roomEdges : !ui.objEdges) return;
@@ -1574,8 +1668,13 @@
       drag.obj.x = nx;
       drag.obj.y = ny;
     } else if (drag.type === "room") {
-      drag.room.x = snapVal(drag.startX + dx);
-      drag.room.y = snapVal(drag.startY + dy);
+      let nx = snapVal(drag.startX + dx), ny = snapVal(drag.startY + dy);
+      if (ui.snap) {
+        const s = snapRoomEdges(drag.room, nx, ny); // align flush with other rooms
+        nx = s.x; ny = s.y; drag.snapGuides = s.guides;
+      } else drag.snapGuides = null;
+      drag.room.x = nx;
+      drag.room.y = ny;
     }
     render();
     syncPanelPosition();
