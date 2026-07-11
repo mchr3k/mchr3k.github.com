@@ -34,7 +34,7 @@
   let state;
   // View transform: screen_px = world_cm * scale + offset
   let view = { scale: 0.45, ox: 70, oy: 70 };
-  let ui = { grid: true, snap: true, roomEdges: true, objEdges: true, objects: true, area: false, gridCm: 10 };
+  let ui = { grid: true, snap: true, roomEdges: true, objEdges: true, objects: true, electrics: true, area: false, gridCm: 10 };
   // The toolbar toggles persist per device. Loaded into `ui` before the first
   // render, then mirrored onto the checkboxes.
   const UI_PREFS_KEY = "floorplan.uiprefs.v1";
@@ -49,6 +49,7 @@
         if (typeof p.roomEdges === "boolean") ui.roomEdges = p.roomEdges;
         if (typeof p.objEdges === "boolean") ui.objEdges = p.objEdges;
         if (typeof p.objects === "boolean") ui.objects = p.objects;
+        if (typeof p.electrics === "boolean") ui.electrics = p.electrics;
         if (typeof p.area === "boolean") ui.area = p.area;
       }
     } catch (_) {}
@@ -56,7 +57,8 @@
   function saveUiPrefs() {
     try {
       localStorage.setItem(UI_PREFS_KEY, JSON.stringify({
-        grid: ui.grid, snap: ui.snap, roomEdges: ui.roomEdges, objEdges: ui.objEdges, objects: ui.objects, area: ui.area,
+        grid: ui.grid, snap: ui.snap, roomEdges: ui.roomEdges, objEdges: ui.objEdges,
+        objects: ui.objects, electrics: ui.electrics, area: ui.area,
       }));
     } catch (_) {}
   }
@@ -64,6 +66,7 @@
     el("chk-room-edges").checked = ui.roomEdges;
     el("chk-obj-edges").checked = ui.objEdges;
     el("chk-objects").checked = ui.objects;
+    el("chk-electrics").checked = ui.electrics;
     el("chk-grid").checked = ui.grid;
     el("chk-snap").checked = ui.snap;
     el("chk-area").checked = ui.area;
@@ -282,6 +285,11 @@
     const room = state.rooms.find((r) => r.id === selection.roomId);
     if (!room) return null;
     if (selection.kind === "room") return { kind: "room", room, item: room };
+    if (selection.kind === "electric") {
+      const elec = (room.electrics || []).find((e) => e.id === selection.elecId);
+      if (!elec) return null;
+      return { kind: "electric", room, elec, item: elec };
+    }
     const obj = room.objects.find((o) => o.id === selection.objId);
     if (!obj) return null;
     return { kind: "object", room, obj, item: obj };
@@ -803,6 +811,7 @@
     }
 
     drawOpenings(g, room);
+    if (ui.electrics) drawElectrics(g, room);
     collectEdgeLabels(geo, room.id, null, sel, room.color);
     if (sel) drawHandles(g, geo);
     svg.appendChild(g);
@@ -845,6 +854,91 @@
     }
     if (sel) drawHandles(g, geo);
     svg.appendChild(g);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Electrics (wall-mounted sockets & switches)
+  // ---------------------------------------------------------------------------
+  // Ordered wall segments of a room outline (local cm), each a unit direction
+  // plus inward/outward normals, and the cumulative perimeter start distance.
+  function roomWallSegments(room) {
+    const edges = itemLocalGeometry(room).edges;
+    let total = 0;
+    const segs = edges.map((e) => {
+      const dx = e.b[0] - e.a[0], dy = e.b[1] - e.a[1];
+      const len = Math.hypot(dx, dy) || 1;
+      const dir = [dx / len, dy / len];
+      const s = { a: e.a, len, dir, inward: [-dir[1], dir[0]], outward: [dir[1], -dir[0]], start: total };
+      total += len;
+      return s;
+    });
+    return { segs, total };
+  }
+
+  // Point + normals at perimeter distance d (local cm), wrapping around corners.
+  function perimeterPoint(room, d) {
+    const { segs, total } = roomWallSegments(room);
+    if (!total) return null;
+    let dd = ((d % total) + total) % total;
+    for (let i = 0; i < segs.length; i++) {
+      const s = segs[i];
+      if (dd <= s.len || i === segs.length - 1) {
+        const t = Math.min(dd, s.len);
+        return { lx: s.a[0] + s.dir[0] * t, ly: s.a[1] + s.dir[1] * t, dir: s.dir, inward: s.inward, outward: s.outward };
+      }
+      dd -= s.len;
+    }
+    return null;
+  }
+
+  // Nearest perimeter distance to a local-cm point (drag an electric along walls).
+  function perimeterProject(room, lx, ly) {
+    const { segs } = roomWallSegments(room);
+    let best = 0, bestDist = Infinity;
+    for (const s of segs) {
+      const t = clamp((lx - s.a[0]) * s.dir[0] + (ly - s.a[1]) * s.dir[1], 0, s.len);
+      const px = s.a[0] + s.dir[0] * t, py = s.a[1] + s.dir[1] * t;
+      const dd = Math.hypot(lx - px, ly - py);
+      if (dd < bestDist) { bestDist = dd; best = s.start + t; }
+    }
+    return Math.round(best);
+  }
+
+  function drawElectrics(g, room) {
+    for (const e of room.electrics || []) {
+      const dragged = drag && drag.type === "electric" && drag.elec === e && dragLayer;
+      drawElectric(dragged ? dragLayer : g, room, e);
+    }
+  }
+
+  function drawElectric(g, room, elec) {
+    const p = perimeterPoint(room, elec.d);
+    if (!p) return;
+    const sel = selection && selection.kind === "electric" && selection.roomId === room.id && selection.elecId === elec.id;
+    const u = p.dir, n = elec.face === "out" ? p.outward : p.inward;
+    const W = elec.size === "double" ? 15 : 9; // faceplate width along the wall (cm)
+    const D = 5; // depth into the face (cm)
+    const toS = (a, b) => worldToScreen(room.x + p.lx + u[0] * a + n[0] * b, room.y + p.ly + u[1] * a + n[1] * b);
+    const eg = svgEl("g", { class: "electric", "data-kind": "electric", "data-room": room.id, "data-elec": elec.id, style: "cursor:move" });
+    const plate = [[-W / 2, 0], [W / 2, 0], [W / 2, D], [-W / 2, D]].map(([a, b]) => toS(a, b));
+    eg.appendChild(svgEl("polygon", {
+      points: plate.map((q) => q[0].toFixed(1) + "," + q[1].toFixed(1)).join(" "),
+      fill: "#ede9fe", "fill-opacity": 0.98, stroke: sel ? "#2563eb" : "#6d28d9", "stroke-width": sel ? 2.5 : 1.5,
+    }));
+    const offs = elec.size === "double" ? [-W / 4, W / 4] : [0];
+    const gh = 2.2; // gang glyph half-size / socket radius (cm)
+    for (const o of offs) {
+      if (elec.kind === "socket") {
+        const c = toS(o, D / 2);
+        eg.appendChild(svgEl("circle", { cx: c[0], cy: c[1], r: gh * view.scale, fill: "none", stroke: "#6d28d9", "stroke-width": 1.4, style: "pointer-events:none" }));
+      } else {
+        const sq = [[-gh, -gh], [gh, -gh], [gh, gh], [-gh, gh]].map(([a, b]) => toS(o + a, D / 2 + b));
+        eg.appendChild(svgEl("polygon", { points: sq.map((q) => q[0].toFixed(1) + "," + q[1].toFixed(1)).join(" "), fill: "none", stroke: "#6d28d9", "stroke-width": 1.4, style: "pointer-events:none" }));
+        const l1 = toS(o - gh * 0.6, D / 2), l2 = toS(o + gh * 0.6, D / 2);
+        eg.appendChild(svgEl("line", { x1: l1[0], y1: l1[1], x2: l2[0], y2: l2[1], stroke: "#6d28d9", "stroke-width": 1.4, style: "pointer-events:none" }));
+      }
+    }
+    g.appendChild(eg);
   }
 
   // X / Y where the room outline crosses a horizontal / vertical line (local cm).
@@ -1245,7 +1339,8 @@
 
   // Do two selections point at the same room/object?
   function sameSel(a, b) {
-    return !!a && !!b && a.kind === b.kind && a.roomId === b.roomId && (a.objId || null) === (b.objId || null);
+    return !!a && !!b && a.kind === b.kind && a.roomId === b.roomId &&
+      (a.objId || null) === (b.objId || null) && (a.elecId || null) === (b.elecId || null);
   }
 
   svg.addEventListener("pointerdown", onPointerDown);
@@ -1319,15 +1414,28 @@
     }
     const roomId = target.getAttribute("data-room");
     const objId = target.getAttribute("data-obj");
+    const elecId = target.getAttribute("data-elec");
     const [gmx, gmy] = mousePos(e);
 
     if (locked) {
       // View/select only: open the item in the side panel for editing, but
       // never move it — a drag pans instead.
-      const sel = objId ? { kind: "object", roomId, objId } : { kind: "room", roomId };
+      const sel = elecId ? { kind: "electric", roomId, elecId }
+        : objId ? { kind: "object", roomId, objId } : { kind: "room", roomId };
       const wasSelected = roomId ? sameSel(selection, sel) : false;
       if (roomId) select(sel);
       drag = { type: "pan", startOx: view.ox, startOy: view.oy, startMx: gmx, startMy: gmy, lockSel: roomId ? sel : null, wasSelected, moved: false };
+      return;
+    }
+
+    if (kind === "electric") {
+      const room = state.rooms.find((r) => r.id === roomId);
+      const elec = room && (room.electrics || []).find((x) => x.id === elecId);
+      if (elec) {
+        const wasSelected = sameSel(selection, { kind: "electric", roomId, elecId });
+        select({ kind: "electric", roomId, elecId });
+        drag = { type: "electric", room, elec, grabMx: gmx, grabMy: gmy, moved: false, wasSelected };
+      }
       return;
     }
 
@@ -1423,6 +1531,15 @@
       drag.moved = true;
       view.ox = drag.startOx + (mx - drag.startMx);
       view.oy = drag.startOy + (my - drag.startMy);
+      render();
+      return;
+    }
+
+    if (drag.type === "electric") {
+      if (!drag.moved && Math.hypot(mx - drag.grabMx, my - drag.grabMy) < TAP_SLOP) return;
+      drag.moved = true;
+      const [wx, wy] = screenToWorld(mx, my);
+      drag.elec.d = perimeterProject(drag.room, wx - drag.room.x, wy - drag.room.y);
       render();
       return;
     }
@@ -1629,6 +1746,7 @@
     if (laser) {
       panelEmpty.hidden = true;
       panelDetails.hidden = true;
+      el("panel-electric").hidden = true;
       panelLaser.hidden = false;
       panel.classList.remove("collapsed");
       el("laser-target").value = laser.target;
@@ -1642,8 +1760,24 @@
       return;
     }
     panelLaser.hidden = true;
+    const panelElectric = el("panel-electric");
 
     const r = resolveSel();
+    if (r && r.kind === "electric") {
+      panelEmpty.hidden = true;
+      panelDetails.hidden = true;
+      panelElectric.hidden = false;
+      panel.classList.remove("collapsed");
+      el("electric-kind").value = r.elec.kind;
+      el("electric-size").value = r.elec.size;
+      el("electric-face").value = r.elec.face;
+      el("btn-rotate").disabled = true;
+      el("btn-duplicate").disabled = false;
+      el("btn-delete").disabled = false;
+      return;
+    }
+    panelElectric.hidden = true;
+
     const hasSel = !!r;
     panelEmpty.hidden = hasSel;
     panelDetails.hidden = !hasSel;
@@ -2103,6 +2237,24 @@
     select({ kind: "object", roomId: room.id, objId: obj.id });
   }
 
+  function addElectric() {
+    let room = null;
+    const r = resolveSel();
+    if (r) room = r.room;
+    else if (state.rooms.length === 1) room = state.rooms[0];
+    if (!room) {
+      alert("Select the room you want to add the electric to first.");
+      return;
+    }
+    if (!room.electrics) room.electrics = [];
+    // Start it midway along the first (top) wall, a socket facing into the room.
+    const segs = roomWallSegments(room).segs;
+    const elec = { id: uid("e"), kind: "socket", size: "single", d: segs.length ? Math.round(segs[0].len / 2) : 0, face: "in" };
+    room.electrics.push(elec);
+    save();
+    select({ kind: "electric", roomId: room.id, elecId: elec.id });
+  }
+
   function rotateSel() {
     const r = resolveSel();
     if (!r || r.kind !== "object") return;
@@ -2157,6 +2309,11 @@
       r.room.objects.push(clone);
       save();
       select({ kind: "object", roomId: r.room.id, objId: clone.id });
+    } else if (r.kind === "electric") {
+      const clone = { ...r.elec, id: uid("e"), d: r.elec.d + 12 };
+      r.room.electrics.push(clone);
+      save();
+      select({ kind: "electric", roomId: r.room.id, elecId: clone.id });
     } else {
       const clone = {
         ...r.room,
@@ -2179,6 +2336,8 @@
     if (!r) return;
     if (r.kind === "object") {
       r.room.objects = r.room.objects.filter((o) => o.id !== r.obj.id);
+    } else if (r.kind === "electric") {
+      r.room.electrics = (r.room.electrics || []).filter((e) => e.id !== r.elec.id);
     } else {
       if (r.room.objects.length && !confirm(`Delete "${r.room.name}" and its ${r.room.objects.length} object(s)?`))
         return;
@@ -2424,6 +2583,16 @@
         h: Math.max(1, +o.h || 50),
         rot: [0, 90, 180, 270].includes(+o.rot) ? +o.rot : 0,
         color: o.color || "#94a3b8",
+      })),
+      // Wall-mounted electrics (sockets / switches). `d` is the distance in cm
+      // along the room outline perimeter; `face` in = into the room, out = the
+      // external wall face.
+      electrics: (r.electrics || []).map((e) => ({
+        id: e.id || uid("e"),
+        kind: e.kind === "switch" ? "switch" : "socket",
+        size: e.size === "double" ? "double" : "single",
+        d: Math.max(0, +e.d || 0),
+        face: e.face === "out" ? "out" : "in",
       })),
     };
   }
@@ -3359,6 +3528,15 @@
   el("btn-redo").addEventListener("click", redo);
   el("btn-add-room").addEventListener("click", addRoom);
   el("btn-add-object").addEventListener("click", addObject);
+  el("btn-add-electric").addEventListener("click", addElectric);
+  el("btn-electric-done").addEventListener("click", () => select(null));
+  const electricSet = (key, val) => {
+    const r = resolveSel();
+    if (r && r.kind === "electric") { r.elec[key] = val; save(); render(); }
+  };
+  el("electric-kind").addEventListener("change", (e) => electricSet("kind", e.target.value));
+  el("electric-size").addEventListener("change", (e) => electricSet("size", e.target.value));
+  el("electric-face").addEventListener("change", (e) => electricSet("face", e.target.value));
   el("btn-laser").addEventListener("click", toggleLaser);
   el("btn-laser-done").addEventListener("click", () => { if (laser) toggleLaser(); });
   const laserSet = (key, val) => { if (laser) { laser[key] = val; render(); el("laser-readout").textContent = laserReadout(); } };
@@ -3382,6 +3560,7 @@
   el("chk-room-edges").addEventListener("change", (e) => { ui.roomEdges = e.target.checked; saveUiPrefs(); render(); });
   el("chk-obj-edges").addEventListener("change", (e) => { ui.objEdges = e.target.checked; saveUiPrefs(); render(); });
   el("chk-objects").addEventListener("change", (e) => { ui.objects = e.target.checked; saveUiPrefs(); render(); });
+  el("chk-electrics").addEventListener("change", (e) => { ui.electrics = e.target.checked; saveUiPrefs(); render(); });
   el("chk-grid").addEventListener("change", (e) => { ui.grid = e.target.checked; saveUiPrefs(); render(); });
   el("chk-snap").addEventListener("change", (e) => { ui.snap = e.target.checked; saveUiPrefs(); });
   el("chk-area").addEventListener("change", (e) => { ui.area = e.target.checked; saveUiPrefs(); render(); });
