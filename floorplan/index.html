@@ -35,6 +35,7 @@
       <div class="toolbar-group">
         <button id="btn-add-room" title="Add a new room">+ Room</button>
         <button id="btn-add-object" title="Add an object to the selected room">+ Object</button>
+        <button id="btn-add-stair" title="Add a staircase to the selected room">+ Stair</button>
         <button id="btn-add-electric" title="Add a socket / switch to the selected room's wall">+ Electric</button>
         <button id="btn-laser" title="Laser measure: cross-check a real laser reading">📏 Laser measure</button>
       </div>
@@ -231,6 +232,15 @@
             <span>Colour</span>
             <input type="color" id="f-color" />
           </label>
+
+          <div id="stair-controls" hidden>
+            <h3>Staircase</h3>
+            <p class="muted small">The arrow points from the bottom up to the top. Doors can sit on any side except the bottom.</p>
+            <label class="check"><input type="checkbox" id="stair-door-top" autocomplete="off" /> Door on top</label>
+            <label class="check"><input type="checkbox" id="stair-door-left" autocomplete="off" /> Door on left</label>
+            <label class="check"><input type="checkbox" id="stair-door-right" autocomplete="off" /> Door on right</label>
+            <label class="check"><input type="checkbox" id="stair-top-marker" autocomplete="off" /> Show a “top” marker (connects up to another floor)</label>
+          </div>
 
           <div id="room-walls" class="room-walls" hidden>
             <h3>Wall features</h3>
