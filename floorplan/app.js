@@ -2794,10 +2794,50 @@
     return [...groups.values()];
   }
 
+  // Every door/window in a floor as a world-space span (clear opening + sill/top),
+  // so a wall can also be cut where a *neighbour* room's opening sits on it.
+  function floorOpenings3(rooms, OX, OY) {
+    const out = [];
+    for (const room of rooms) {
+      for (const seg of roomSegments(room)) {
+        for (const p of layoutSegment(seg)) {
+          if (!p.type) continue;
+          const a = clamp(p.start, 0, seg.len), b = clamp(p.end, 0, seg.len);
+          if (b - a < 1) continue;
+          const op = p.op;
+          const sill = op.type === "window" ? (op.sill || 0) : 0;
+          out.push({
+            roomId: room.id, type: op.type, sill, top: sill + (op.height || (op.type === "window" ? 120 : 200)),
+            x1: room.x + seg.sx + seg.dir[0] * a + OX, y1: room.y + seg.sy + seg.dir[1] * a + OY,
+            x2: room.x + seg.sx + seg.dir[0] * b + OX, y2: room.y + seg.sy + seg.dir[1] * b + OY,
+            vertical: Math.abs(seg.dir[0]) < 0.5,
+          });
+        }
+      }
+    }
+    return out;
+  }
+
+  // A visible frame around an opening (jambs + header, plus a sill and glass pane
+  // for windows), so doorways and windows read clearly in 3D.
+  function openingTrim3(boxes, cxAt, cyAt, horiz, WT, OZ, h) {
+    const fc = "#475569", ft = WT + 6, jamb = 4, hz = 6;
+    const mid = (h.a + h.b) / 2;
+    const jambBox = (m) => boxes.push(box3(cxAt(m), cyAt(m), OZ + h.sill, horiz ? jamb : ft, horiz ? ft : jamb, h.top - h.sill, fc, "frame", 0));
+    jambBox(h.a); jambBox(h.b);
+    const span = (z, hh) => boxes.push(box3(cxAt(mid), cyAt(mid), OZ + z, horiz ? h.b - h.a : ft, horiz ? ft : h.b - h.a, hh, fc, "frame", 0));
+    span(h.top - hz, hz); // header
+    if (h.type === "window") {
+      span(h.sill, hz); // sill
+      boxes.push(box3(cxAt(mid), cyAt(mid), OZ + h.sill + hz, horiz ? h.b - h.a : 3, horiz ? 3 : h.b - h.a, Math.max(1, h.top - h.sill - hz * 2), "#bae6fd", "glass", 0));
+    }
+  }
+
   // Emit one floor's geometry, translated by T = {tx,ty,z}.
-  function buildFloorBoxes3(rooms, T, boxes, stairs, bounds) {
+  function buildFloorBoxes3(rooms, T, boxes, stairs, roomsOut, bounds) {
     const WT = 10, OX = T.tx, OY = T.ty, OZ = T.z;
     const fh = floorRoomsHeight(rooms);
+    const floorOps = floorOpenings3(rooms, OX, OY);
     for (const room of rooms) {
       const H = room.height || 300;
       const poly = itemLocalGeometry(room).points.map(([lx, ly]) => [room.x + lx + OX, room.y + ly + OY]);
@@ -2805,6 +2845,7 @@
       const rminx = Math.min(...xs), rmaxx = Math.max(...xs), rminy = Math.min(...ys), rmaxy = Math.max(...ys);
       bounds.minX = Math.min(bounds.minX, rminx); bounds.minY = Math.min(bounds.minY, rminy);
       bounds.maxX = Math.max(bounds.maxX, rmaxx); bounds.maxY = Math.max(bounds.maxY, rmaxy);
+      roomsOut.push({ name: room.name, minx: rminx, maxx: rmaxx, miny: rminy, maxy: rmaxy, z0: OZ, z1: OZ + H });
       boxes.push(box3((rminx + rmaxx) / 2, (rminy + rmaxy) / 2, OZ - 4, rmaxx - rminx, rmaxy - rminy, 4, room.color, "floor", 0));
       boxes.push(box3((rminx + rmaxx) / 2, (rminy + rmaxy) / 2, OZ + H, rmaxx - rminx, rmaxy - rminy, 4, "#e2e8f0", "ceiling", 0));
 
@@ -2819,13 +2860,21 @@
           if (b - a < 1) continue;
           const op = p.op;
           const sill = op.type === "window" ? (op.sill || 0) : 0;
-          holes.push({ a, b, sill, top: sill + (op.height || (op.type === "window" ? 120 : 200)) });
+          holes.push({ a, b, sill, top: sill + (op.height || (op.type === "window" ? 120 : 200)), type: op.type, own: true });
+        }
+        // Also cut where a neighbour room's opening lies on this same wall line.
+        for (const o of floorOps) {
+          if (o.roomId === room.id || o.vertical !== !horiz) continue;
+          if (Math.abs((o.x1 - sxw) * -dy + (o.y1 - syw) * dx) > 1) continue; // same line?
+          const pa = (o.x1 - sxw) * dx + (o.y1 - syw) * dy, pb = (o.x2 - sxw) * dx + (o.y2 - syw) * dy;
+          const lo = Math.max(0, Math.min(pa, pb)), hi = Math.min(seg.len, Math.max(pa, pb));
+          if (hi - lo > 1) holes.push({ a: lo, b: hi, sill: o.sill, top: o.top, own: false });
         }
         holes.sort((u, v) => u.a - v.a);
+        const cxAt = (m) => sxw + dx * m, cyAt = (m) => syw + dy * m;
         const wall = (a, b, z0, z1) => {
           if (b - a < 1 || z1 - z0 < 1) return;
-          const cx = sxw + dx * ((a + b) / 2), cy = syw + dy * ((a + b) / 2), along = b - a;
-          boxes.push(box3(cx, cy, OZ + z0, horiz ? along : WT, horiz ? WT : along, z1 - z0, "#cbd5e1", "wall", 0));
+          boxes.push(box3(cxAt((a + b) / 2), cyAt((a + b) / 2), OZ + z0, horiz ? b - a : WT, horiz ? WT : b - a, z1 - z0, "#cbd5e1", "wall", 0));
         };
         let cursor = 0;
         for (const h of holes) {
@@ -2833,6 +2882,7 @@
           if (h.sill > 0) wall(h.a, h.b, 0, h.sill);
           if (h.top < H) wall(h.a, h.b, h.top, H);
           cursor = Math.max(cursor, h.b);
+          if (h.own) openingTrim3(boxes, cxAt, cyAt, horiz, WT, OZ, h); // frame + glass
         }
         wall(cursor, seg.len, 0, H);
       }
@@ -2864,10 +2914,10 @@
   // of rooms; stairs (via their top marker) link a floor to the one above, which
   // is stacked a storey up and shifted so the marker sits over the stair top.
   function build3DScene() {
-    const boxes = [], stairs = [];
+    const boxes = [], stairs = [], rooms3 = [];
     const bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
     const rooms = state.rooms;
-    if (!rooms.length) return { boxes, stairs, bounds, spawn: { x: 0, y: 0 } };
+    if (!rooms.length) return { boxes, stairs, rooms: rooms3, bounds, spawn: { x: 0, y: 0 } };
 
     const comps = floorComponents(rooms);
     const compOf = {};
@@ -2907,10 +2957,10 @@
     }
     // Any cluster not linked by a stair stays at its own spot on the ground.
     comps.forEach((c, ci) => { if (!tf[ci]) tf[ci] = { tx: 0, ty: 0, z: 0 }; });
-    comps.forEach((c, ci) => buildFloorBoxes3(c, tf[ci], boxes, stairs, bounds));
+    comps.forEach((c, ci) => buildFloorBoxes3(c, tf[ci], boxes, stairs, rooms3, bounds));
 
     const r0 = rooms[0];
-    return { boxes, stairs, bounds, spawn: { x: r0.x + r0.w / 2, y: r0.y + r0.h / 2 } };
+    return { boxes, stairs, rooms: rooms3, bounds, spawn: { x: r0.x + r0.w / 2, y: r0.y + r0.h / 2 } };
   }
   window.__plan3d = { build: build3DScene };
 

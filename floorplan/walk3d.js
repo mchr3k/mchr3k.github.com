@@ -19,10 +19,12 @@
   const STEP_UP = 40;   // most you can step up in one go (climb stairs; stay under them)
   const PITCH_LIM = Math.PI / 2 - 0.05;
 
+  const roomHud = document.getElementById("walk3d-room");
+
   let THREE = null, renderer = null, scene = null, camera = null;
   let raf = 0, active = false, last = 0;
-  let colliders = [], grounds = [];
-  let yaw = 0, pitch = 0, flyOffset = 0, groundY = 0;
+  let colliders = [], grounds = [], roomsList = [];
+  let yaw = 0, pitch = 0, flyOffset = 0, groundY = 0, curRoom = null, hiQual = false;
   const keys = Object.create(null);
 
   function loadThree() {
@@ -85,29 +87,72 @@
     scene.add(e);
   }
 
+  // A gradient sky dome (vertex colours, no shader) so doorways/windows look out
+  // onto a rough sky + horizon.
+  function makeSky() {
+    const geo = new THREE.SphereGeometry(24000, 24, 16);
+    const pos = geo.attributes.position, colors = [];
+    const top = new THREE.Color("#5b8fd0"), hor = new THREE.Color("#d6e4f2"), grd = new THREE.Color("#8a9a6f"), tmp = new THREE.Color();
+    for (let i = 0; i < pos.count; i++) {
+      const y = pos.getY(i) / 24000;
+      if (y >= 0) tmp.copy(hor).lerp(top, Math.min(1, y * 1.5));
+      else tmp.copy(hor).lerp(grd, Math.min(1, -y * 3));
+      colors.push(tmp.r, tmp.g, tmp.b);
+    }
+    geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    const sky = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, depthWrite: false }));
+    sky.renderOrder = -1;
+    return sky;
+  }
+
   function build() {
     const data = window.__plan3d.build();
+    hiQual = !(window.matchMedia && window.matchMedia("(pointer: coarse)").matches); // touch = lean, desktop = full
     scene = new THREE.Scene();
-    scene.background = new THREE.Color("#dbe4f0");
-    scene.add(new THREE.HemisphereLight("#ffffff", "#8794a8", 1.0));
-    const dl = new THREE.DirectionalLight("#ffffff", 0.85); dl.position.set(0.5, 1, 0.25); scene.add(dl);
-    const dl2 = new THREE.DirectionalLight("#c7d2fe", 0.45); dl2.position.set(-0.4, 0.5, -0.6); scene.add(dl2);
-    edgeMat = new THREE.LineBasicMaterial({ color: "#1e293b", transparent: true, opacity: 0.55 });
+    scene.background = new THREE.Color("#bcd4ec");
+    const bx = data.bounds, fin = isFinite(bx.minX);
+    const cx = fin ? (bx.minX + bx.maxX) / 2 : 0, cz = fin ? (bx.minY + bx.maxY) / 2 : 0;
+    const ext = fin ? Math.max(bx.maxX - bx.minX, bx.maxY - bx.minY, 1000) : 1000;
 
     const W = holder.clientWidth || window.innerWidth, H = holder.clientHeight || window.innerHeight;
-    camera = new THREE.PerspectiveCamera(75, W / H, 4, 30000);
+    camera = new THREE.PerspectiveCamera(75, W / H, 4, 60000);
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(W, H);
+    if (hiQual) { renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap; }
     holder.appendChild(renderer.domElement);
     attachLook(renderer.domElement);
     makeControls();
 
-    colliders = []; grounds = [];
+    // Global fill (stronger on mobile, since desktop also gets per-room lights).
+    scene.add(new THREE.HemisphereLight("#eaf2ff", "#7c8a9e", hiQual ? 0.75 : 1.2));
+    const sun = new THREE.DirectionalLight("#fff3df", hiQual ? 1.05 : 0.95);
+    sun.position.set(cx + ext * 0.5, ext * 1.3, cz - ext * 0.4);
+    sun.target.position.set(cx, 0, cz); scene.add(sun.target); scene.add(sun);
+    const fill = new THREE.DirectionalLight("#cfe0ff", 0.3);
+    fill.position.set(cx - ext, ext * 0.6, cz + ext); scene.add(fill);
+    if (hiQual) {
+      sun.castShadow = true;
+      const sc = sun.shadow.camera;
+      sc.left = -ext; sc.right = ext; sc.top = ext; sc.bottom = -ext; sc.near = 1; sc.far = ext * 4;
+      sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0004;
+    }
+    scene.add(makeSky());
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(120000, 120000), new THREE.MeshLambertMaterial({ color: "#93a778" }));
+    ground.rotation.x = -Math.PI / 2; ground.position.set(cx, -3, cz);
+    ground.receiveShadow = hiQual;
+    scene.add(ground);
+    edgeMat = new THREE.LineBasicMaterial({ color: "#1e293b", transparent: true, opacity: 0.5 });
+
+    colliders = []; grounds = []; roomsList = data.rooms || []; curRoom = null;
     const cache = {};
+    const trans = (k) => k === "ceiling" || k === "glass";
     const matFor = (c, kind) => {
       const key = c + kind;
-      if (!cache[key]) cache[key] = new THREE.MeshLambertMaterial({ color: c, transparent: kind === "ceiling", opacity: kind === "ceiling" ? 0.35 : 1, side: kind === "ceiling" ? THREE.DoubleSide : THREE.FrontSide });
+      if (!cache[key]) {
+        if (kind === "glass") cache[key] = new THREE.MeshLambertMaterial({ color: c, transparent: true, opacity: 0.3, side: THREE.DoubleSide, emissive: new THREE.Color("#e2f2ff"), emissiveIntensity: 0.55 });
+        else cache[key] = new THREE.MeshLambertMaterial({ color: c, transparent: kind === "ceiling", opacity: kind === "ceiling" ? 0.35 : 1, side: kind === "ceiling" ? THREE.DoubleSide : THREE.FrontSide });
+      }
       return cache[key];
     };
     for (const b of data.boxes) {
@@ -117,13 +162,26 @@
         mesh.position.set(b.cx, b.z + b.h / 2, b.cy);
         const ry = b.rot ? (-b.rot * Math.PI) / 180 : 0;
         if (ry) mesh.rotation.y = ry;
+        if (hiQual && !trans(b.kind)) { mesh.castShadow = true; mesh.receiveShadow = true; }
         scene.add(mesh);
-        if (b.kind !== "ceiling") addEdges(geo, mesh.position, ry);
+        if (b.kind !== "ceiling" && b.kind !== "glass") addEdges(geo, mesh.position, ry);
       }
       if ((b.kind === "wall" || b.kind === "collider") && b.z < 150 && b.z + b.h > 40) colliders.push(b);
       if (b.kind === "floor" || b.kind === "stair") grounds.push(b);
     }
     for (const s of data.stairs || []) buildStair(s);
+
+    // Desktop only: a soft point light near each room's ceiling (capped for perf).
+    if (hiQual) {
+      let n = 0;
+      for (const r of roomsList) {
+        if (n++ >= 14) break;
+        const diag = Math.hypot(r.maxx - r.minx, r.maxy - r.miny);
+        const pl = new THREE.PointLight("#fff2d6", 0.85, Math.max(500, diag * 1.1), 1);
+        pl.position.set((r.minx + r.maxx) / 2, r.z1 - 25, (r.miny + r.maxy) / 2);
+        scene.add(pl);
+      }
+    }
 
     groundY = groundAt(data.spawn.x, data.spawn.y, 0);
     camera.position.set(data.spawn.x, groundY + EYE, data.spawn.y);
@@ -145,7 +203,9 @@
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
     g.computeVertexNormals();
-    scene.add(new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: s.color, side: THREE.DoubleSide })));
+    const soffit = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: s.color, side: THREE.DoubleSide }));
+    if (hiQual) { soffit.castShadow = true; soffit.receiveShadow = true; }
+    scene.add(soffit);
     buildStairSide(s, s.bl, s.tl, s.doors.left);
     buildStairSide(s, s.br, s.tr, s.doors.right);
   }
@@ -173,7 +233,9 @@
     }
     p.needsUpdate = true;
     geo.computeVertexNormals();
-    scene.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: s.color, side: THREE.DoubleSide })));
+    const wall = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: s.color, side: THREE.DoubleSide }));
+    if (hiQual) { wall.castShadow = true; wall.receiveShadow = true; }
+    scene.add(wall);
     scene.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), edgeMat)); // outline the door shape
   }
 
@@ -256,6 +318,15 @@
     camera.position.z = z;
     groundY = groundAt(x, z, groundY); // step-up / drop follow (climb or go under stairs)
     camera.position.y = groundY + EYE + flyOffset;
+
+    if (roomHud) {
+      let name = "";
+      const y = camera.position.y;
+      for (const r of roomsList) {
+        if (x >= r.minx && x <= r.maxx && z >= r.miny && z <= r.maxy && y >= r.z0 - 40 && y <= r.z1 + 120) { name = r.name; break; }
+      }
+      if (name !== curRoom) { curRoom = name; roomHud.textContent = name; roomHud.style.display = name ? "block" : "none"; }
+    }
     renderer.render(scene, camera);
   }
 
@@ -295,6 +366,7 @@
     window.removeEventListener("keydown", keyDown);
     window.removeEventListener("keyup", keyUp);
     for (const k in keys) delete keys[k];
+    if (roomHud) roomHud.style.display = "none";
     overlay.hidden = true;
     if (renderer) { renderer.dispose(); }
     holder.innerHTML = "";
