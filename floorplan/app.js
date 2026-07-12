@@ -767,6 +767,16 @@
   }
 
   function drawDoor(g, p1, p2, inward, roomId, opId, hinge, swing, frameCm, hasLeaf) {
+    const eg = svgEl("g", { class: "opening door", "data-kind": "opening", "data-room": roomId, "data-opening": opId, style: "cursor:move" });
+    openingHit(eg, p1, p2, inward);
+    drawDoorGlyph(eg, p1, p2, inward, hinge, swing, frameCm, hasLeaf);
+    g.appendChild(eg);
+  }
+
+  // The door drawing itself (mask + frame bands + swung-open leaf & arc), shared
+  // by room doors and staircase doors. `p1`/`p2` are the opening ends in screen
+  // px, `inward` the swing-into (screen) direction.
+  function drawDoorGlyph(eg, p1, p2, inward, hinge, swing, frameCm, hasLeaf) {
     const fullPx = dist(p1, p2) || 1;
     // Frame width per side in screen px, capped so a leaf always remains.
     const fpx = Math.min(Math.max(0, (frameCm || 0) * view.scale), fullPx * 0.45);
@@ -779,8 +789,6 @@
     const hingePt = hinge === "end" ? j2 : j1;
     const farPt = hinge === "end" ? j1 : j2;
     const tip = [hingePt[0] + dirVec[0] * r, hingePt[1] + dirVec[1] * r];
-    const eg = svgEl("g", { class: "opening door", "data-kind": "opening", "data-room": roomId, "data-opening": opId, style: "cursor:move" });
-    openingHit(eg, p1, p2, inward);
     // Only the clear opening is cut away; the frame bands stay as wall.
     maskWall(eg, j1, j2);
     if (fpx > 0.5) {
@@ -798,7 +806,6 @@
       }));
       eg.appendChild(svgEl("line", { x1: hingePt[0], y1: hingePt[1], x2: tip[0], y2: tip[1], stroke: "#475569", "stroke-width": 2, style: "pointer-events:none" }));
     }
-    g.appendChild(eg);
   }
 
   function drawWindow(g, p1, p2, inward, roomId, opId) {
@@ -952,28 +959,90 @@
     g.appendChild(svgEl("text", { x: nb[0], y: nb[1], "text-anchor": "middle", "font-size": 12, "font-weight": 600, fill: "#1f2933", "font-family": "system-ui, sans-serif", style: "pointer-events:none; user-select:none" }, obj.name));
   }
 
-  // Doors on a staircase's sides (never the bottom): open the edge with a leaf
-  // + swing arc, like a room door.
+  const STAIR_SIDE_LABELS = { top: "Top", left: "Left", right: "Right" };
+
+  // A staircase door's local (object-cm) geometry for a side: its start corner,
+  // direction along the side, inward normal (into the stair footprint), and the
+  // side length. Sides run from a fixed corner: top left→right, left/right
+  // bottom→top (so "position" is measured up the run).
+  function stairSideGeom(obj, side) {
+    if (side === "top") return { start: [0, 0], dir: [1, 0], inw: [0, 1], len: obj.w };
+    if (side === "left") return { start: [0, obj.h], dir: [0, -1], inw: [1, 0], len: obj.h };
+    return { start: [obj.w, obj.h], dir: [0, -1], inw: [-1, 0], len: obj.h }; // right
+  }
+
+  // Resolved door config for a staircase side (clamped for rendering).
+  function stairDoorCfg(obj, side) {
+    const len = side === "top" ? obj.w : obj.h;
+    const c = (obj.doorCfg && obj.doorCfg[side]) || {};
+    const width = clamp(c.width != null ? c.width : Math.min(70, len * 0.7), 6, len);
+    const pos = clamp(c.pos != null ? c.pos : len / 2, width / 2, len - width / 2);
+    return { pos, width, hinge: c.hinge === "end" ? "end" : "start", swing: c.swing === "in" ? "in" : "out", leaf: c.leaf === "no" ? "no" : "yes", len };
+  }
+
+  // Doors on a staircase's sides (never the bottom): drawn (and positioned)
+  // exactly like room doors — a leaf swung open with a swing arc.
   function drawStairDoors(g, toS, obj) {
-    const w = obj.w, h = obj.h;
-    const sides = [
-      { on: obj.doors && obj.doors.top, a: [0, 0], b: [w, 0], out: [0, -1] },
-      { on: obj.doors && obj.doors.left, a: [0, 0], b: [0, h], out: [-1, 0] },
-      { on: obj.doors && obj.doors.right, a: [w, 0], b: [w, h], out: [1, 0] },
-    ];
-    for (const s of sides) {
-      if (!s.on) continue;
-      const len = Math.hypot(s.b[0] - s.a[0], s.b[1] - s.a[1]) || 1;
-      const ed = [(s.b[0] - s.a[0]) / len, (s.b[1] - s.a[1]) / len];
-      const dw = Math.min(70, len * 0.7);
-      const mid = [(s.a[0] + s.b[0]) / 2, (s.a[1] + s.b[1]) / 2];
-      const j1L = [mid[0] - ed[0] * dw / 2, mid[1] - ed[1] * dw / 2];
-      const j2L = [mid[0] + ed[0] * dw / 2, mid[1] + ed[1] * dw / 2];
-      const tipL = [j1L[0] + s.out[0] * dw, j1L[1] + s.out[1] * dw];
-      const j1 = toS(j1L[0], j1L[1]), j2 = toS(j2L[0], j2L[1]), tip = toS(tipL[0], tipL[1]);
-      maskWall(g, j1, j2);
-      g.appendChild(svgEl("line", { x1: j1[0], y1: j1[1], x2: tip[0], y2: tip[1], stroke: "#475569", "stroke-width": 2, style: "pointer-events:none" }));
-      g.appendChild(svgEl("path", { d: arcPath(j1[0], j1[1], dist(j1, tip), j2, tip), fill: "none", stroke: "#64748b", "stroke-width": 1, "stroke-dasharray": "3 3", style: "pointer-events:none" }));
+    for (const side of ["top", "left", "right"]) {
+      if (!(obj.doors && obj.doors[side])) continue;
+      const S = stairSideGeom(obj, side);
+      const d = stairDoorCfg(obj, side);
+      const a = d.pos - d.width / 2, b = d.pos + d.width / 2;
+      const aL = [S.start[0] + S.dir[0] * a, S.start[1] + S.dir[1] * a];
+      const bL = [S.start[0] + S.dir[0] * b, S.start[1] + S.dir[1] * b];
+      const p1 = toS(aL[0], aL[1]), p2 = toS(bL[0], bL[1]);
+      // inward, in screen space (toS carries the object's rotation).
+      const mid = [(aL[0] + bL[0]) / 2, (aL[1] + bL[1]) / 2];
+      const m0 = toS(mid[0], mid[1]), m1 = toS(mid[0] + S.inw[0], mid[1] + S.inw[1]);
+      let inward = [m1[0] - m0[0], m1[1] - m0[1]];
+      const il = Math.hypot(inward[0], inward[1]) || 1;
+      inward = [inward[0] / il, inward[1] / il];
+      const eg = svgEl("g", { style: "pointer-events:none" });
+      drawDoorGlyph(eg, p1, p2, inward, d.hinge, d.swing, 0, d.leaf !== "no");
+      g.appendChild(eg);
+    }
+  }
+
+  // Ensure a staircase side has a stored door config (filled with defaults) so
+  // the panel fields have concrete values to edit.
+  function ensureStairDoorCfg(obj, side) {
+    const len = side === "top" ? obj.w : obj.h;
+    if (!obj.doorCfg) obj.doorCfg = {};
+    const d = obj.doorCfg[side] || (obj.doorCfg[side] = {});
+    if (d.width == null) d.width = Math.round(Math.min(70, len * 0.7));
+    if (d.pos == null) d.pos = Math.round(len / 2);
+    if (d.hinge == null) d.hinge = "start";
+    if (d.swing == null) d.swing = "out";
+    if (d.leaf == null) d.leaf = "yes";
+    return d;
+  }
+
+  // Config rows for each enabled staircase door (position/width/hinge/swing/leaf).
+  function renderStairDoorConfig(obj) {
+    const host = el("stair-door-config");
+    if (!host) return;
+    host.replaceChildren();
+    for (const side of ["top", "left", "right"]) {
+      if (!(obj.doors && obj.doors[side])) continue;
+      const d = ensureStairDoorCfg(obj, side);
+      const li = document.createElement("div");
+      li.className = "wall-item";
+      const head = document.createElement("div");
+      head.className = "wall-item-head";
+      const kindEl = document.createElement("span");
+      kindEl.className = "kind";
+      kindEl.textContent = "Door · " + STAIR_SIDE_LABELS[side];
+      head.appendChild(kindEl);
+      const grid = document.createElement("div");
+      grid.className = "wall-grid";
+      grid.append(
+        openingField(d, "pos", "Position (cm)", "number"),
+        openingField(d, "width", "Width (cm)", "number"),
+        openingField(d, "leaf", "Leaf", "leaf")
+      );
+      if ((d.leaf || "yes") !== "no") grid.append(openingField(d, "hinge", "Hinge", "hinge"), openingField(d, "swing", "Swing", "swing"));
+      li.append(head, grid);
+      host.appendChild(li);
     }
   }
 
@@ -1280,6 +1349,14 @@
     // Every room-outline coordinate is a snap target, so objects align to walls
     // and cut-in/out edges, not just the base rectangle.
     for (const [px, py] of itemLocalGeometry(room).points) { xT.push(px); yT.push(py); }
+    // A "Stairs up" marker sits over the room on the floor above, so let it snap
+    // to *any* room's outer edge (incl. cut-in / cut-out edges), in this room's
+    // local frame — not just the room it happens to belong to.
+    if (obj.type === "stairtop") {
+      for (const or of state.rooms) {
+        for (const [px, py] of itemLocalGeometry(or).points) { xT.push(or.x + px - room.x); yT.push(or.y + py - room.y); }
+      }
+    }
     for (const o of room.objects) {
       if (o.id === obj.id) continue;
       const a = objAABBAt(o, o.x, o.y);
@@ -1992,8 +2069,15 @@
       el("stair-door-top").checked = !!item.doors.top;
       el("stair-door-left").checked = !!item.doors.left;
       el("stair-door-right").checked = !!item.doors.right;
-      el("stair-top-marker").checked = !!findStairTop(item.id);
+      const hasTop = !!findStairTop(item.id);
+      el("stair-top-marker").checked = hasTop;
+      // A stair with a "top" marker climbs a full storey, so it has a ceiling
+      // above it; one without climbs a set height (a step-up / split level).
+      el("stair-ceiling-field").hidden = !hasTop;
+      el("stair-climb-field").hidden = hasTop;
       el("stair-ceiling").value = round(item.ceiling || 300);
+      el("stair-climb").value = round(item.objHeight || 45);
+      renderStairDoorConfig(item);
     }
 
     const walls = el("room-walls");
@@ -2366,6 +2450,7 @@
     numField("f-objheight", "objHeight", 1);  // object height (3D)
     numField("f-objelev", "elevation", 0);    // object height off the ground (3D)
     numField("stair-ceiling", "ceiling", 1);  // ceiling above a staircase (3D)
+    numField("stair-climb", "objHeight", 1);   // height climbed by a top-less staircase (3D)
     el("electric-elev").addEventListener("input", (e) => {
       const r = resolveSel();
       if (!r || r.kind !== "electric") return;
@@ -2736,15 +2821,18 @@
       return [room.x + obj.x + rx + ox, room.y + obj.y + ry + oy];
     };
     const doors = obj.doors || {};
-    const dw = Math.min(70, obj.h * 0.7), doorH = 200;
+    const doorH = 200;
+    // Resolved, positioned door config per side (or null when that side is open).
+    const dLeft = doors.left ? stairDoorCfg(obj, "left") : null;
+    const dRight = doors.right ? stairDoorCfg(obj, "right") : null;
     // Descriptor for the custom stair mesh: a diagonal soffit (the cupboard roof)
     // with the flat treads on top, solid triangular sides, and a door hole on a
     // door side (flat-topped, or a diagonal cut where it meets the soffit).
     stairs.push({
       bl: toWorld(0, obj.h), br: toWorld(obj.w, obj.h),   // bottom (low) end corners
       tl: toWorld(0, 0), tr: toWorld(obj.w, 0),           // top (high) end corners
-      zBase, rise, doorWidth: dw, doorHeight: doorH,
-      doors: { left: !!doors.left, right: !!doors.right, top: !!doors.top }, color: "#94a3b8",
+      zBase, rise, doorHeight: doorH,
+      doors: { left: dLeft, right: dRight, top: !!doors.top }, color: "#94a3b8",
     });
     // Thin walkable treads (the walk engine climbs these; underside stays hollow).
     for (let i = 0; i < N; i++) {
@@ -2756,18 +2844,27 @@
     // Landing at the top.
     const [lx, ly] = toWorld(obj.w / 2, obj.h * 0.05);
     out.push(box3(lx, ly, zBase + rise, obj.w, Math.max(20, obj.h * 0.14), 4, "#cbd5e1", "floor", rot));
-    // Invisible side colliders that match the triangular walls; a door side keeps
-    // the door gap open. ("collider" boxes block but aren't drawn.)
-    const along = obj.h, d0 = along / 2 - dw / 2, d1 = along / 2 + dw / 2;
-    const side = (xLocal, hasDoor) => {
-      for (const [a, b] of (hasDoor ? [[0, d0], [d1, along]] : [[0, along]])) {
+    // Invisible side colliders that match the triangular walls; a door leaves its
+    // (positioned) doorway open. ("collider" boxes block but aren't drawn.)
+    const along = obj.h;
+    const side = (xLocal, d, inwX) => {
+      const gap = d ? [clamp(d.pos - d.width / 2, 0, along), clamp(d.pos + d.width / 2, 0, along)] : null;
+      const spans = gap ? [[0, gap[0]], [gap[1], along]] : [[0, along]];
+      for (const [a, b] of spans) {
         if (b - a < 1) continue;
         const [cx, cy] = toWorld(xLocal, obj.h - (a + b) / 2);
         out.push(box3(cx, cy, zBase, 8, b - a, rise, "#cbd5e1", "collider", rot));
       }
+      // The door leaf, swung open (hinged at one end of the doorway).
+      if (d && d.leaf !== "no") {
+        const aHinge = d.hinge === "end" ? d.pos + d.width / 2 : d.pos - d.width / 2;
+        const sign = (d.swing === "in" ? 1 : -1) * inwX;
+        const [cx, cy] = toWorld(xLocal + sign * d.width / 2, obj.h - aHinge);
+        out.push(box3(cx, cy, zBase, d.width, 4, Math.max(20, Math.min(doorH, rise)), DOOR_COLOR3, "door", rot));
+      }
     };
-    side(0, doors.left);
-    side(obj.w, doors.right);
+    side(0, dLeft, 1);      // left side: inward is +x
+    side(obj.w, dRight, -1); // right side: inward is -x
   }
 
   function floorRoomsHeight(rooms) {
@@ -2818,9 +2915,13 @@
     return out;
   }
 
+  // Cream walls / ceilings, and a wood door leaf, for the 3D walk.
+  const WALL_COLOR3 = "#e8dfc6", CEIL_COLOR3 = "#f1ead4", DOOR_COLOR3 = "#b0916f";
+
   // A visible frame around an opening (jambs + header, plus a sill and glass pane
-  // for windows), so doorways and windows read clearly in 3D.
-  function openingTrim3(boxes, cxAt, cyAt, horiz, WT, OZ, h) {
+  // for windows, or a leaf swung open for doors), so doorways and windows read
+  // clearly in 3D. `seg` gives the wall direction/normal for the door swing.
+  function openingTrim3(boxes, cxAt, cyAt, horiz, WT, OZ, h, seg) {
     const fc = "#475569", ft = WT + 6, jamb = 4, hz = 6;
     const mid = (h.a + h.b) / 2;
     const jambBox = (m) => boxes.push(box3(cxAt(m), cyAt(m), OZ + h.sill, horiz ? jamb : ft, horiz ? ft : jamb, h.top - h.sill, fc, "frame", 0));
@@ -2830,11 +2931,39 @@
     if (h.type === "window") {
       span(h.sill, hz); // sill
       boxes.push(box3(cxAt(mid), cyAt(mid), OZ + h.sill + hz, horiz ? h.b - h.a : 3, horiz ? 3 : h.b - h.a, Math.max(1, h.top - h.sill - hz * 2), "#bae6fd", "glass", 0));
+    } else if (h.type === "door" && h.hasLeaf && seg) {
+      // Draw the leaf swung 90° into its open position: hinged at one jamb and
+      // standing perpendicular to the wall, on the swing side.
+      const inw = seg.inward, dir = seg.dir;
+      const sw = h.swing === "in" ? inw : [-inw[0], -inw[1]];
+      const clear = Math.max(2, (h.b - h.a) - jamb); // spans the clear opening
+      const hm = h.hinge === "end" ? h.b - jamb / 2 : h.a + jamb / 2;
+      const th = 4; // leaf thickness
+      const cx = cxAt(hm) + sw[0] * clear / 2, cy = cyAt(hm) + sw[1] * clear / 2;
+      const lw = Math.abs(sw[0]) * clear + Math.abs(dir[0]) * th;
+      const ld = Math.abs(sw[1]) * clear + Math.abs(dir[1]) * th;
+      boxes.push(box3(cx, cy, OZ + h.sill, lw, ld, Math.max(1, h.top - h.sill - hz), DOOR_COLOR3, "door", 0));
     }
   }
 
-  // Emit one floor's geometry, translated by T = {tx,ty,z}.
-  function buildFloorBoxes3(rooms, T, boxes, stairs, roomsOut, bounds) {
+  // Rectangular holes (a stairwell) to cut from a floor/ceiling polygon at
+  // `level`, clipped just inside the room's bounding box so ShapeGeometry stays
+  // well-formed. Returns hole rings as [[x,y],...] loops (local to nothing — world).
+  function wellHoles(wells, level, rminx, rmaxx, rminy, rmaxy) {
+    const holes = [];
+    for (const w of wells || []) {
+      if (Math.abs(w.z - level) > 3) continue;
+      const lx = Math.max(rminx + 1, w.minx), hx = Math.min(rmaxx - 1, w.maxx);
+      const ly = Math.max(rminy + 1, w.miny), hy = Math.min(rmaxy - 1, w.maxy);
+      if (hx - lx > 2 && hy - ly > 2) holes.push([[lx, ly], [hx, ly], [hx, hy], [lx, hy]]);
+    }
+    return holes;
+  }
+
+  // Emit one floor's geometry, translated by T = {tx,ty,z}. `polys` collects the
+  // flat floor/ceiling polygons (drawn to the room's true outline, with stairwell
+  // holes from `wells`); `wells` are world-space openings between stacked floors.
+  function buildFloorBoxes3(rooms, T, boxes, polys, stairs, roomsOut, bounds, wells) {
     const WT = 10, OX = T.tx, OY = T.ty, OZ = T.z;
     const fh = floorRoomsHeight(rooms);
     const floorOps = floorOpenings3(rooms, OX, OY);
@@ -2846,8 +2975,17 @@
       bounds.minX = Math.min(bounds.minX, rminx); bounds.minY = Math.min(bounds.minY, rminy);
       bounds.maxX = Math.max(bounds.maxX, rmaxx); bounds.maxY = Math.max(bounds.maxY, rmaxy);
       roomsOut.push({ name: room.name, minx: rminx, maxx: rmaxx, miny: rminy, maxy: rmaxy, z0: OZ, z1: OZ + H });
-      boxes.push(box3((rminx + rmaxx) / 2, (rminy + rmaxy) / 2, OZ - 4, rmaxx - rminx, rmaxy - rminy, 4, room.color, "floor", 0));
-      boxes.push(box3((rminx + rmaxx) / 2, (rminy + rmaxy) / 2, OZ + H, rmaxx - rminx, rmaxy - rminy, 4, "#e2e8f0", "ceiling", 0));
+      // Floor & ceiling follow the room's real outline (not its bounding box) so
+      // cut-in / cut-out rooms don't overlap and z-fight a neighbour. A stairwell
+      // is punched through both. The ceiling sits 2 cm below the storey top so it
+      // never coincides with the floor of the room stacked above it.
+      polys.push({ points: poly, z: OZ, color: room.color, kind: "floor", holes: wellHoles(wells, OZ, rminx, rmaxx, rminy, rmaxy) });
+      polys.push({ points: poly, z: OZ + H - 2, color: CEIL_COLOR3, kind: "ceiling", holes: wellHoles(wells, OZ + H, rminx, rmaxx, rminy, rmaxy) });
+      // Invisible bounding-box slab so the walk engine has a walkable surface.
+      boxes.push(box3((rminx + rmaxx) / 2, (rminy + rmaxy) / 2, OZ - 4, rmaxx - rminx, rmaxy - rminy, 4, room.color, "ground", 0));
+      // Corner posts at every outline vertex fill the little square gaps left where
+      // two perpendicular wall boxes meet at a cut-in / cut-out corner.
+      for (const [px, py] of poly) boxes.push(box3(px, py, OZ, WT + 2, WT + 2, H, WALL_COLOR3, "wall", 0));
 
       for (const seg of roomSegments(room)) {
         const [dx, dy] = seg.dir;
@@ -2860,7 +2998,10 @@
           if (b - a < 1) continue;
           const op = p.op;
           const sill = op.type === "window" ? (op.sill || 0) : 0;
-          holes.push({ a, b, sill, top: sill + (op.height || (op.type === "window" ? 120 : 200)), type: op.type, own: true });
+          holes.push({
+            a, b, sill, top: sill + (op.height || (op.type === "window" ? 120 : 200)), type: op.type, own: true,
+            hinge: op.hinge, swing: op.swing, hasLeaf: (op.leaf || "yes") !== "no", frame: op.frame || 0,
+          });
         }
         // Open the base wall full-height where a cut-in/cut-out meets it — the
         // notch's own face/side walls (also from roomSegments) enclose that bay
@@ -2881,7 +3022,7 @@
         const cxAt = (m) => sxw + dx * m, cyAt = (m) => syw + dy * m;
         const wall = (a, b, z0, z1) => {
           if (b - a < 1 || z1 - z0 < 1) return;
-          boxes.push(box3(cxAt((a + b) / 2), cyAt((a + b) / 2), OZ + z0, horiz ? b - a : WT, horiz ? WT : b - a, z1 - z0, "#cbd5e1", "wall", 0));
+          boxes.push(box3(cxAt((a + b) / 2), cyAt((a + b) / 2), OZ + z0, horiz ? b - a : WT, horiz ? WT : b - a, z1 - z0, WALL_COLOR3, "wall", 0));
         };
         let cursor = 0;
         for (const h of holes) {
@@ -2889,7 +3030,7 @@
           if (h.sill > 0) wall(h.a, h.b, 0, h.sill);
           if (h.top < H) wall(h.a, h.b, h.top, H);
           cursor = Math.max(cursor, h.b);
-          if (h.own) openingTrim3(boxes, cxAt, cyAt, horiz, WT, OZ, h); // frame + glass
+          if (h.own) openingTrim3(boxes, cxAt, cyAt, horiz, WT, OZ, h, seg); // frame + glass/leaf
         }
         wall(cursor, seg.len, 0, H);
       }
@@ -2903,7 +3044,7 @@
           stairBoxes3(boxes, stairs, room, obj, OX, OY, OZ, rise);
           continue;
         }
-        if (obj.type === "stairtop") { boxes.push(box3(cx, cy, OZ + (obj.elevation || 0), obj.w, obj.h, 8, "#f59e0b", "stairtop", obj.rot || 0)); continue; }
+        if (obj.type === "stairtop") continue; // a 2D marker only; in 3D it's the stairwell opening
         boxes.push(box3(cx, cy, OZ + (obj.elevation || 0), obj.w, obj.h, obj.objHeight || 50, obj.color, "object", obj.rot || 0));
       }
       for (const e of room.electrics || []) {
@@ -2921,10 +3062,10 @@
   // of rooms; stairs (via their top marker) link a floor to the one above, which
   // is stacked a storey up and shifted so the marker sits over the stair top.
   function build3DScene() {
-    const boxes = [], stairs = [], rooms3 = [];
+    const boxes = [], polys = [], stairs = [], rooms3 = [], wells = [];
     const bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
     const rooms = state.rooms;
-    if (!rooms.length) return { boxes, stairs, rooms: rooms3, bounds, spawn: { x: 0, y: 0 } };
+    if (!rooms.length) return { boxes, polys, stairs, rooms: rooms3, bounds, spawn: { x: 0, y: 0 } };
 
     const comps = floorComponents(rooms);
     const compOf = {};
@@ -2959,15 +3100,28 @@
           const stx = room.x + obj.x + rx + T.tx, sty = room.y + obj.y + ry + T.ty; // stair top in 3D
           tf[tci] = { tx: stx - mx, ty: sty - my, z: T.z + fh };
           queue.push(tci);
+          // A stairwell opening at the storey boundary so you can see between the
+          // floors: the stair's footprint (final world) plus the marker's, which
+          // maps onto the stair top. Cut through the ceiling below and floor above.
+          const sc = [[0, 0], [obj.w, 0], [obj.w, obj.h], [0, obj.h]].map(([lx, ly]) => {
+            const [px, py] = rot ? rotatePoint(lx, ly, obj.w / 2, obj.h / 2, rot) : [lx, ly];
+            return [room.x + obj.x + px + T.tx, room.y + obj.y + py + T.ty];
+          });
+          const mr = top.obj.rot || 0, mhx = (mr % 180) ? top.obj.h / 2 : top.obj.w / 2, mhy = (mr % 180) ? top.obj.w / 2 : top.obj.h / 2;
+          wells.push({
+            minx: Math.min(stx - mhx, ...sc.map((c) => c[0])), maxx: Math.max(stx + mhx, ...sc.map((c) => c[0])),
+            miny: Math.min(sty - mhy, ...sc.map((c) => c[1])), maxy: Math.max(sty + mhy, ...sc.map((c) => c[1])),
+            z: tf[tci].z,
+          });
         }
       }
     }
     // Any cluster not linked by a stair stays at its own spot on the ground.
     comps.forEach((c, ci) => { if (!tf[ci]) tf[ci] = { tx: 0, ty: 0, z: 0 }; });
-    comps.forEach((c, ci) => buildFloorBoxes3(c, tf[ci], boxes, stairs, rooms3, bounds));
+    comps.forEach((c, ci) => buildFloorBoxes3(c, tf[ci], boxes, polys, stairs, rooms3, bounds, wells));
 
     const r0 = rooms[0];
-    return { boxes, stairs, rooms: rooms3, bounds, spawn: { x: r0.x + r0.w / 2, y: r0.y + r0.h / 2 } };
+    return { boxes, polys, stairs, rooms: rooms3, bounds, spawn: { x: r0.x + r0.w / 2, y: r0.y + r0.h / 2 } };
   }
   window.__plan3d = { build: build3DScene };
 
@@ -3039,6 +3193,20 @@
 
   // Normalise a notch (recursively, including nested children). Only top-level
   // notches carry a `side`; nested ones sit on their parent's face.
+  // Per-side staircase door placement. Keeps only the sides that carry config;
+  // each is { pos?, width?, hinge, swing, leaf } (pos/width optional → defaults).
+  function normalizeStairDoorCfg(cfg) {
+    cfg = cfg || {};
+    const one = (c) => {
+      c = c || {};
+      const out = { hinge: c.hinge === "end" ? "end" : "start", swing: c.swing === "in" ? "in" : "out", leaf: c.leaf === "no" ? "no" : "yes" };
+      if (c.pos != null && isFinite(+c.pos)) out.pos = Math.max(0, Math.round(+c.pos));
+      if (c.width != null && isFinite(+c.width)) out.width = Math.max(1, Math.round(+c.width));
+      return out;
+    };
+    return { top: one(cfg.top), left: one(cfg.left), right: one(cfg.right) };
+  }
+
   function normalizeNotch(n, isTop) {
     const out = {
       id: n.id || uid("n"),
@@ -3104,14 +3272,18 @@
         type: ["stair", "stairtop"].includes(o.type) ? o.type : "object",
         // Doors on a staircase's sides (never the bottom).
         doors: { top: !!(o.doors && o.doors.top), left: !!(o.doors && o.doors.left), right: !!(o.doors && o.doors.right) },
+        // Per-side door placement/config (position along the side, width, hinge,
+        // swing, leaf) so a staircase door can be positioned like a room door.
+        doorCfg: normalizeStairDoorCfg(o.doorCfg),
         // A stairtop marker links back to its staircase.
         stairId: o.stairId ? String(o.stairId) : null,
         // For a stairtop marker: the id of the layout (floor) this stair climbs
         // up to. In 3D that floor is stacked one storey above.
         targetLayout: o.targetLayout ? String(o.targetLayout) : null,
         // 3D: object height (cm, default 50) and height off the ground (default 0).
-        // A staircase uses `ceiling` for the headroom above it (default 3 m).
-        objHeight: Math.max(1, Math.round(+o.objHeight || (o.type === "stair" ? Math.max(1, Math.round(+r.height || 300)) : 50))),
+        // A staircase without a "top" marker uses objHeight as its "height climbed"
+        // — default to a few steps (a split-level step-up), not the whole storey.
+        objHeight: Math.max(1, Math.round(+o.objHeight || (o.type === "stair" ? 45 : 50))),
         elevation: Math.max(0, Math.round(+o.elevation || 0)),
         ceiling: Math.max(1, Math.round(+o.ceiling || Math.max(1, Math.round(+r.height || 300)))),
       })),
@@ -4062,7 +4234,7 @@
   el("btn-add-room").addEventListener("click", addRoom);
   el("btn-add-object").addEventListener("click", addObject);
   el("btn-add-stair").addEventListener("click", addStair);
-  const stairDoor = (side, on) => { const r = resolveSel(); if (r && r.kind === "object" && r.obj.type === "stair") { r.obj.doors[side] = on; save(); render(); } };
+  const stairDoor = (side, on) => { const r = resolveSel(); if (r && r.kind === "object" && r.obj.type === "stair") { r.obj.doors[side] = on; save(); render(); refreshPanel(); } };
   el("stair-door-top").addEventListener("change", (e) => stairDoor("top", e.target.checked));
   el("stair-door-left").addEventListener("change", (e) => stairDoor("left", e.target.checked));
   el("stair-door-right").addEventListener("change", (e) => stairDoor("right", e.target.checked));
