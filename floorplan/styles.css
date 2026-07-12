@@ -634,3 +634,44 @@ code {
   font: inherit;
 }
 .walk3d-bar button:hover { border-color: #64748b; }
+
+/* 3D walk: on-screen touch controls */
+.walk3d-pad,
+.walk3d-vpad {
+  position: absolute;
+  bottom: 18px;
+  display: grid;
+  gap: 8px;
+  z-index: 5;
+  touch-action: none;
+}
+.walk3d-pad {
+  left: 16px;
+  grid-template-columns: repeat(3, 52px);
+  grid-template-rows: repeat(3, 52px);
+}
+.walk3d-pad .up { grid-column: 2; grid-row: 1; }
+.walk3d-pad .left { grid-column: 1; grid-row: 2; }
+.walk3d-pad .right { grid-column: 3; grid-row: 2; }
+.walk3d-pad .down { grid-column: 2; grid-row: 3; }
+.walk3d-vpad {
+  right: 16px;
+  grid-template-columns: 52px;
+}
+.walk3d-key {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: 1px solid rgba(203, 213, 225, 0.5);
+  background: rgba(15, 23, 42, 0.55);
+  color: #e2e8f0;
+  font-size: 20px;
+  line-height: 1;
+  padding: 0;
+  min-height: 0;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+}
+.walk3d-key:active { background: rgba(37, 99, 235, 0.7); }
