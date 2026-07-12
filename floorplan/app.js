@@ -2728,39 +2728,46 @@
     return { cx, cy, z, w, d, h, color, kind, rot: rot || 0 };
   }
 
-  function stairBoxes3(out, room, obj, ox, oy, zBase, rise) {
+  function stairBoxes3(out, stairs, room, obj, ox, oy, zBase, rise) {
     const rot = obj.rot || 0;
     const N = clamp(Math.round(rise / 18), 3, 30);
     const toWorld = (lx, ly) => {
       const [rx, ry] = rot ? rotatePoint(lx, ly, obj.w / 2, obj.h / 2, rot) : [lx, ly];
       return [room.x + obj.x + rx + ox, room.y + obj.y + ry + oy];
     };
+    const doors = obj.doors || {};
+    const dw = Math.min(70, obj.h * 0.7), doorH = 200;
+    // Descriptor for the custom stair mesh: a diagonal soffit (the cupboard roof)
+    // with the flat treads on top, solid triangular sides, and a door hole on a
+    // door side (flat-topped, or a diagonal cut where it meets the soffit).
+    stairs.push({
+      bl: toWorld(0, obj.h), br: toWorld(obj.w, obj.h),   // bottom (low) end corners
+      tl: toWorld(0, 0), tr: toWorld(obj.w, 0),           // top (high) end corners
+      zBase, rise, doorWidth: dw, doorHeight: doorH,
+      doors: { left: !!doors.left, right: !!doors.right, top: !!doors.top }, color: "#94a3b8",
+    });
+    // Thin walkable treads (the walk engine climbs these; underside stays hollow).
     for (let i = 0; i < N; i++) {
-      // Treads climb from the bottom end (local y=h) up to the top (y=0). Each
-      // step spans only from the previous tread up to its own, so the underside
-      // is a hollow staircase profile (an understair void) — not a solid wedge.
       const yc = obj.h - (i + 0.5) * (obj.h / N);
       const [wx, wy] = toWorld(obj.w / 2, yc);
-      const z0 = i * (rise / N), z1 = (i + 1) * (rise / N);
-      out.push(box3(wx, wy, zBase + z0, obj.w, obj.h / N, z1 - z0, "#94a3b8", "stair", rot));
+      const top = (i + 1) * (rise / N);
+      out.push(box3(wx, wy, zBase + top - 5, obj.w, obj.h / N, 5, "#94a3b8", "stair", rot));
     }
-    // Enclose the understair void on each long side that has no door, following
-    // the sloping underside (a stepped triangle). The void is then reachable
-    // only through a side door, whose opening tapers with the stairs (triangular).
-    const doors = obj.doors || {};
-    for (const side of ["left", "right"]) {
-      if (doors[side]) continue;
-      const xL = side === "left" ? 0 : obj.w;
-      for (let i = 1; i < N; i++) {
-        const yc = obj.h - (i + 0.5) * (obj.h / N);
-        const under = i * (rise / N); // underside height at this band
-        const [wx, wy] = toWorld(xL, yc);
-        out.push(box3(wx, wy, zBase, 8, obj.h / N, under, "#cbd5e1", "wall", rot));
-      }
-    }
-    // A small landing at the very top so there's somewhere to stand.
+    // Landing at the top.
     const [lx, ly] = toWorld(obj.w / 2, obj.h * 0.05);
     out.push(box3(lx, ly, zBase + rise, obj.w, Math.max(20, obj.h * 0.14), 4, "#cbd5e1", "floor", rot));
+    // Invisible side colliders that match the triangular walls; a door side keeps
+    // the door gap open. ("collider" boxes block but aren't drawn.)
+    const along = obj.h, d0 = along / 2 - dw / 2, d1 = along / 2 + dw / 2;
+    const side = (xLocal, hasDoor) => {
+      for (const [a, b] of (hasDoor ? [[0, d0], [d1, along]] : [[0, along]])) {
+        if (b - a < 1) continue;
+        const [cx, cy] = toWorld(xLocal, obj.h - (a + b) / 2);
+        out.push(box3(cx, cy, zBase, 8, b - a, rise, "#cbd5e1", "collider", rot));
+      }
+    };
+    side(0, doors.left);
+    side(obj.w, doors.right);
   }
 
   function floorRoomsHeight(rooms) {
@@ -2788,7 +2795,7 @@
   }
 
   // Emit one floor's geometry, translated by T = {tx,ty,z}.
-  function buildFloorBoxes3(rooms, T, boxes, bounds) {
+  function buildFloorBoxes3(rooms, T, boxes, stairs, bounds) {
     const WT = 10, OX = T.tx, OY = T.ty, OZ = T.z;
     const fh = floorRoomsHeight(rooms);
     for (const room of rooms) {
@@ -2836,7 +2843,7 @@
           // A stair with a top marker climbs a full storey (to the floor above);
           // without one it's a local ramp of its own height.
           const rise = findStairTop(obj.id) ? fh : (obj.objHeight || H);
-          stairBoxes3(boxes, room, obj, OX, OY, OZ, rise);
+          stairBoxes3(boxes, stairs, room, obj, OX, OY, OZ, rise);
           continue;
         }
         if (obj.type === "stairtop") { boxes.push(box3(cx, cy, OZ + (obj.elevation || 0), obj.w, obj.h, 8, "#f59e0b", "stairtop", obj.rot || 0)); continue; }
@@ -2857,10 +2864,10 @@
   // of rooms; stairs (via their top marker) link a floor to the one above, which
   // is stacked a storey up and shifted so the marker sits over the stair top.
   function build3DScene() {
-    const boxes = [];
+    const boxes = [], stairs = [];
     const bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
     const rooms = state.rooms;
-    if (!rooms.length) return { boxes, bounds, spawn: { x: 0, y: 0 } };
+    if (!rooms.length) return { boxes, stairs, bounds, spawn: { x: 0, y: 0 } };
 
     const comps = floorComponents(rooms);
     const compOf = {};
@@ -2900,10 +2907,10 @@
     }
     // Any cluster not linked by a stair stays at its own spot on the ground.
     comps.forEach((c, ci) => { if (!tf[ci]) tf[ci] = { tx: 0, ty: 0, z: 0 }; });
-    comps.forEach((c, ci) => buildFloorBoxes3(c, tf[ci], boxes, bounds));
+    comps.forEach((c, ci) => buildFloorBoxes3(c, tf[ci], boxes, stairs, bounds));
 
     const r0 = rooms[0];
-    return { boxes, bounds, spawn: { x: r0.x + r0.w / 2, y: r0.y + r0.h / 2 } };
+    return { boxes, stairs, bounds, spawn: { x: r0.x + r0.w / 2, y: r0.y + r0.h / 2 } };
   }
   window.__plan3d = { build: build3DScene };
 

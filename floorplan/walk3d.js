@@ -102,18 +102,66 @@
       return cache[key];
     };
     for (const b of data.boxes) {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.w, b.h, b.d), matFor(b.color, b.kind));
-      mesh.position.set(b.cx, b.z + b.h / 2, b.cy);
-      if (b.rot) mesh.rotation.y = (-b.rot * Math.PI) / 180;
-      scene.add(mesh);
-      if (b.kind === "wall" && b.z < 150 && b.z + b.h > 40) colliders.push(b);
+      if (b.kind !== "collider") { // "collider" boxes block but aren't drawn
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.w, b.h, b.d), matFor(b.color, b.kind));
+        mesh.position.set(b.cx, b.z + b.h / 2, b.cy);
+        if (b.rot) mesh.rotation.y = (-b.rot * Math.PI) / 180;
+        scene.add(mesh);
+      }
+      if ((b.kind === "wall" || b.kind === "collider") && b.z < 150 && b.z + b.h > 40) colliders.push(b);
       if (b.kind === "floor" || b.kind === "stair") grounds.push(b);
     }
+    for (const s of data.stairs || []) buildStair(s);
 
     groundY = groundAt(data.spawn.x, data.spawn.y, 0);
     camera.position.set(data.spawn.x, groundY + EYE, data.spawn.y);
     yaw = 0; pitch = 0; flyOffset = 0;
     onResize();
+  }
+
+  // Custom stair mesh: a diagonal soffit (the understair-cupboard roof, with the
+  // flat treads sitting on it) plus solid triangular side walls, each with a door
+  // hole on a door side — flat-topped, or diagonally cut where it meets the soffit.
+  function buildStair(s) {
+    const V = (px, py, h) => new THREE.Vector3(px, h, py); // plan (px,py) + height -> three
+    const z0 = s.zBase, z1 = s.zBase + s.rise;
+    const bl = V(s.bl[0], s.bl[1], z0), br = V(s.br[0], s.br[1], z0);
+    const tr = V(s.tr[0], s.tr[1], z1), tl = V(s.tl[0], s.tl[1], z1);
+    const pos = [];
+    const tri = (a, b, c) => pos.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+    tri(bl, br, tr); tri(bl, tr, tl); // diagonal soffit quad
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    g.computeVertexNormals();
+    scene.add(new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: s.color, side: THREE.DoubleSide })));
+    buildStairSide(s, s.bl, s.tl, s.doors.left);
+    buildStairSide(s, s.br, s.tr, s.doors.right);
+  }
+
+  function buildStairSide(s, low, high, hasDoor) {
+    const runLen = Math.hypot(high[0] - low[0], high[1] - low[1]) || 1;
+    const rise = s.rise;
+    const soffitH = (a) => (rise * a) / runLen; // roof height along the run
+    const shape = new THREE.Shape();
+    shape.moveTo(0, 0); shape.lineTo(runLen, 0); shape.lineTo(runLen, rise); shape.lineTo(0, 0);
+    if (hasDoor) {
+      const dw = s.doorWidth, dL = runLen / 2 - dw / 2, dR = runLen / 2 + dw / 2;
+      const topAt = (a) => Math.max(5, Math.min(s.doorHeight, soffitH(a) - 2)); // stay under the soffit
+      const hole = new THREE.Path();
+      hole.moveTo(dL, 0); hole.lineTo(dR, 0);
+      for (let k = 0; k <= 6; k++) { const a = dR - (dR - dL) * (k / 6); hole.lineTo(a, topAt(a)); }
+      shape.holes.push(hole);
+    }
+    const geo = new THREE.ShapeGeometry(shape);
+    const p = geo.attributes.position;
+    const runDir = [(high[0] - low[0]) / runLen, (high[1] - low[1]) / runLen];
+    for (let i = 0; i < p.count; i++) {
+      const a = p.getX(i), z = p.getY(i);
+      p.setXYZ(i, low[0] + runDir[0] * a, s.zBase + z, low[1] + runDir[1] * a);
+    }
+    p.needsUpdate = true;
+    geo.computeVertexNormals();
+    scene.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: s.color, side: THREE.DoubleSide })));
   }
 
   function onResize() {
