@@ -2862,6 +2862,13 @@
           const sill = op.type === "window" ? (op.sill || 0) : 0;
           holes.push({ a, b, sill, top: sill + (op.height || (op.type === "window" ? 120 : 200)), type: op.type, own: true });
         }
+        // Open the base wall full-height where a cut-in/cut-out meets it — the
+        // notch's own face/side walls (also from roomSegments) enclose that bay
+        // or recess, so a solid base wall here would wall it off from the room.
+        for (const [ca, cb] of seg.cutouts || []) {
+          const lo = clamp(ca, 0, seg.len), hi = clamp(cb, 0, seg.len);
+          if (hi - lo > 1) holes.push({ a: lo, b: hi, sill: 0, top: H, own: false });
+        }
         // Also cut where a neighbour room's opening lies on this same wall line.
         for (const o of floorOps) {
           if (o.roomId === room.id || o.vertical !== !horiz) continue;
