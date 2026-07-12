@@ -14,9 +14,10 @@
 
   const EYE = 160;      // eye height above the floor (cm)
   const RADIUS = 18;    // body radius for wall collision (cm)
-  const SPEED = 320;    // walk speed (cm/s)
-  const FLY = 260;      // vertical fly speed (cm/s)
-  const STEP_UP = 40;   // most you can step up in one go (climb stairs; stay under them)
+  const SPEED = 185;    // walk speed (cm/s) — a natural human pace (comfort)
+  const FLY = 220;      // vertical fly speed (cm/s)
+  const STEP_UP = 50;   // most you can step up in one go (climb stairs / split levels)
+  const EYE_SMOOTH = 9; // how fast the eye height eases to the floor (per second) — damps stair-step jolts
   const PITCH_LIM = Math.PI / 2 - 0.05;
 
   const roomHud = document.getElementById("walk3d-room");
@@ -24,7 +25,7 @@
   let THREE = null, renderer = null, scene = null, camera = null;
   let raf = 0, active = false, last = 0;
   let colliders = [], grounds = [], roomsList = [];
-  let yaw = 0, pitch = 0, flyOffset = 0, groundY = 0, curRoom = null, hiQual = false;
+  let yaw = 0, pitch = 0, flyOffset = 0, groundY = 0, eyeY = 0, curRoom = null, hiQual = false;
   const keys = Object.create(null);
 
   function loadThree() {
@@ -115,7 +116,7 @@
     const ext = fin ? Math.max(bx.maxX - bx.minX, bx.maxY - bx.minY, 1000) : 1000;
 
     const W = holder.clientWidth || window.innerWidth, H = holder.clientHeight || window.innerHeight;
-    camera = new THREE.PerspectiveCamera(75, W / H, 4, 60000);
+    camera = new THREE.PerspectiveCamera(70, W / H, 4, 60000);
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(W, H);
@@ -124,19 +125,10 @@
     attachLook(renderer.domElement);
     makeControls();
 
-    // Global fill (stronger on mobile, since desktop also gets per-room lights).
-    scene.add(new THREE.HemisphereLight("#eaf2ff", "#7c8a9e", hiQual ? 0.75 : 1.2));
-    const sun = new THREE.DirectionalLight("#fff3df", hiQual ? 1.05 : 0.95);
-    sun.position.set(cx + ext * 0.5, ext * 1.3, cz - ext * 0.4);
-    sun.target.position.set(cx, 0, cz); scene.add(sun.target); scene.add(sun);
-    const fill = new THREE.DirectionalLight("#cfe0ff", 0.3);
-    fill.position.set(cx - ext, ext * 0.6, cz + ext); scene.add(fill);
-    if (hiQual) {
-      sun.castShadow = true;
-      const sc = sun.shadow.camera;
-      sc.left = -ext; sc.right = ext; sc.top = ext; sc.bottom = -ext; sc.near = 1; sc.far = ext * 4;
-      sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0004;
-    }
+    // Light comes from the windows and the ceiling orbs (added below), not from a
+    // low-angle "sun" (which read as light from nowhere). A soft, even sky ambient
+    // keeps the cream walls reading as cream rather than going pure black.
+    scene.add(new THREE.HemisphereLight("#f2f5fb", "#c8c2b4", 0.72));
     scene.add(makeSky());
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(120000, 120000), new THREE.MeshLambertMaterial({ color: "#93a778" }));
     ground.rotation.x = -Math.PI / 2; ground.position.set(cx, -3, cz);
@@ -169,38 +161,52 @@
         scene.add(mesh);
         if (b.kind !== "ceiling" && b.kind !== "glass") addEdges(geo, mesh.position, ry);
       }
-      if ((b.kind === "wall" || b.kind === "collider") && b.z < 150 && b.z + b.h > 40) colliders.push(b);
+      // Block on tall walls (at any floor level) and colliders; low sills, lintels
+      // and rails don't block. (The old `z < 150` test wrongly let you walk through
+      // every upstairs wall.)
+      if (b.kind === "collider" || (b.kind === "wall" && b.h >= 150)) colliders.push(b);
       if (b.kind === "ground" || b.kind === "floor" || b.kind === "stair") grounds.push(b);
     }
     // Floors & ceilings are flat outline polygons (with stairwell holes cut out).
     for (const p of data.polys || []) buildPolyFloor(p);
+    for (const r of data.rails || []) buildRail(r);
     for (const s of data.stairs || []) buildStair(s);
 
-    // A glowing bulb hanging just under each room's ceiling (both quality tiers).
+    // A glowing bulb + a warm point light hanging under every room's ceiling.
     const orbGeo = new THREE.SphereGeometry(9, 16, 12);
     const orbMat = new THREE.MeshBasicMaterial({ color: "#fff6d8" });
+    let lit = 0;
     for (const r of roomsList) {
+      const ox = (r.minx + r.maxx) / 2, oz = (r.miny + r.maxy) / 2, oy = r.z1 - 16;
       const orb = new THREE.Mesh(orbGeo, orbMat);
-      orb.position.set((r.minx + r.maxx) / 2, r.z1 - 16, (r.miny + r.maxy) / 2);
+      orb.position.set(ox, oy, oz);
       scene.add(orb);
-    }
-
-    // Desktop only: a soft point light near each room's ceiling (capped for perf).
-    if (hiQual) {
-      let n = 0;
-      for (const r of roomsList) {
-        if (n++ >= 14) break;
+      if (lit++ < 24) {
         const diag = Math.hypot(r.maxx - r.minx, r.maxy - r.miny);
-        const pl = new THREE.PointLight("#fff2d6", 0.85, Math.max(500, diag * 1.1), 1);
-        pl.position.set((r.minx + r.maxx) / 2, r.z1 - 25, (r.miny + r.maxy) / 2);
+        // decay 1 (softer than inverse-square) so one bulb lights a whole room.
+        const pl = new THREE.PointLight("#ffe6b0", 65, Math.max(800, diag * 1.7), 1);
+        pl.position.set(ox, oy - 10, oz);
         scene.add(pl);
       }
     }
+    // Daylight spilling in through each window (from the glass pane).
+    let winLit = 0;
+    for (const b of data.boxes) {
+      if (b.kind !== "glass" || winLit++ >= 24) continue;
+      const wl = new THREE.PointLight("#cfe0ff", 40, 500, 1);
+      wl.position.set(b.cx, b.z + b.h / 2, b.cy);
+      scene.add(wl);
+    }
 
     groundY = groundAt(data.spawn.x, data.spawn.y, 0);
-    camera.position.set(data.spawn.x, groundY + EYE, data.spawn.y);
+    eyeY = groundY + EYE;
+    camera.position.set(data.spawn.x, eyeY, data.spawn.y);
     yaw = 0; pitch = -0.12; flyOffset = 0; // start looking very slightly down into the room
     onResize();
+    // Dev/testing hook: pose the camera and render one frame for a headless
+    // screenshot (see floorplan/dev/render3d.cjs and floorplan/CLAUDE.md). Inert in
+    // normal use — the walk loop resumes on any input.
+    window.__walk3d = { view(px, py, pz, yw, pt) { active = false; camera.position.set(px, py, pz); camera.rotation.set(pt, yw, 0, "YXZ"); renderer.render(scene, camera); }, rooms: () => roomsList };
   }
 
   // A flat floor/ceiling drawn to the room's real outline (a plan-space polygon),
@@ -221,6 +227,24 @@
     geo.computeVertexNormals();
     const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: p.color, side: THREE.DoubleSide }));
     if (hiQual) mesh.receiveShadow = true;
+    scene.add(mesh);
+  }
+
+  // A banister rail whose foot follows a raking floor (alongside split-level
+  // steps): a vertical strip from each floor point up by `h`. pts = [x, planY, z].
+  function buildRail(r) {
+    if (!r.pts || r.pts.length < 2) return;
+    const pos = [];
+    for (let i = 0; i < r.pts.length - 1; i++) {
+      const [ax, ay, az] = r.pts[i], [bx, by, bz] = r.pts[i + 1];
+      const a0 = [ax, az, ay], b0 = [bx, bz, by], a1 = [ax, az + r.h, ay], b1 = [bx, bz + r.h, by];
+      pos.push(...a0, ...b0, ...b1, ...a0, ...b1, ...a1);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    g.computeVertexNormals();
+    const mesh = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: r.color, side: THREE.DoubleSide }));
+    if (hiQual) { mesh.castShadow = true; mesh.receiveShadow = true; }
     scene.add(mesh);
   }
 
@@ -354,7 +378,11 @@
     camera.position.x = x;
     camera.position.z = z;
     groundY = groundAt(x, z, groundY); // step-up / drop follow (climb or go under stairs)
-    camera.position.y = groundY + EYE + flyOffset;
+    // Ease the eye height toward the floor so stepping onto a stair tread or a
+    // split level glides instead of snapping (a big motion-sickness culprit).
+    const targetY = groundY + EYE + flyOffset;
+    eyeY += (targetY - eyeY) * Math.min(1, dt * EYE_SMOOTH);
+    camera.position.y = eyeY;
 
     if (roomHud) {
       let name = "";
