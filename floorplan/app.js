@@ -2859,9 +2859,8 @@
       const top = (i + 1) * (rise / N);
       out.push(box3(wx, wy, zBase + top - 5, obj.w, obj.h / N, 5, "#94a3b8", "stair", rot));
     }
-    // Landing at the top.
-    const [lx, ly] = toWorld(obj.w / 2, obj.h * 0.05);
-    out.push(box3(lx, ly, zBase + rise, obj.w, Math.max(20, obj.h * 0.14), 4, "#cbd5e1", "floor", rot));
+    // (No landing slab: a stair with a "Stairs up" marker gets a floor landing at
+    // the marker; a within-room stair meets the raised floor at its top tread.)
     // Invisible side colliders that match the triangular walls; a door leaves its
     // (positioned) doorway open. ("collider" boxes block but aren't drawn.)
     const along = obj.h;
@@ -3129,15 +3128,15 @@
               return OZ + split.rise * Math.max(0, Math.min(1, (coord - split.runLo) / (split.runHi - split.runLo)));
             return OZ;
           };
+          // Every banister edge follows the floor level (so a rail on the raised
+          // side sits on it, and one alongside the steps rakes down with them).
           const N = 24, pts = [];
-          let lo = Infinity, hi = -Infinity;
           for (let i = 0; i <= N; i++) {
             const m = (seg.len * i) / N, coord = split.axis === 0 ? sxw + dx * m : syw + dy * m;
-            const fz = floorAt(coord);
-            lo = Math.min(lo, fz); hi = Math.max(hi, fz);
-            pts.push([sxw + dx * m, syw + dy * m, fz]);
+            pts.push([sxw + dx * m, syw + dy * m, floorAt(coord)]);
           }
-          if (hi - lo > 2) { rails.push({ pts, h: segH, color: WALL_COLOR3 }); continue; }
+          rails.push({ pts, h: segH, color: WALL_COLOR3 });
+          continue;
         }
         const holes = [];
         for (const p of layoutSegment(seg)) {
@@ -3269,6 +3268,11 @@
           const stx = room.x + obj.x + rx + T.tx, sty = room.y + obj.y + ry + T.ty; // stair top in 3D
           tf[tci] = { tx: stx - mx, ty: sty - my, z: T.z + fh };
           queue.push(tci);
+          // The "Stairs up" marker footprint is the landing where the stair joins
+          // the floor above: fill it with floor (matching that floor) so the stair
+          // top meets the upper hall with no gap. The marker itself draws nothing.
+          const lw = (top.obj.rot % 180) ? top.obj.h : top.obj.w, ld = (top.obj.rot % 180) ? top.obj.w : top.obj.h;
+          boxes.push(box3(stx, sty, tf[tci].z - 4, lw, ld, 4, target.color, "floor", 0));
           // If the floor above has a banister cut-in, that void is the stairwell
           // opening (handled below); otherwise punch a small opening at the "Stairs
           // up" marker's footprint through the floor above / ceiling below, and open
