@@ -63,12 +63,15 @@
 
   // Resolve the camera circle out of any wall box it overlaps (axis-aligned).
   // Only walls that overlap the body's height at `feetY` block — so a wall on the
-  // floor above (or below) doesn't stop you even though it shares this x,z.
+  // floor above (or below) doesn't stop you even though it shares this x,z. A wall
+  // whose top is within a step (STEP_UP) of your feet is one you can step up over,
+  // like the arrival wall a staircase climbs to meet at the storey above — matching
+  // groundAt, which lets you step up onto a surface the same height.
   function collide(x, z, feetY) {
     for (let iter = 0; iter < 3; iter++) {
       let hit = false;
       for (const b of colliders) {
-        if (b.z >= feetY + 160 || b.z + b.h <= feetY + 10) continue; // wrong storey
+        if (b.z >= feetY + 160 || b.z + b.h <= feetY + STEP_UP) continue; // above head / steppable
         const hw = b.w / 2 + RADIUS, hd = b.d / 2 + RADIUS;
         const dx = x - b.cx, dz = z - b.cy;
         if (Math.abs(dx) < hw && Math.abs(dz) < hd) {
@@ -215,8 +218,8 @@
       view(px, py, pz, yw, pt) { active = false; camera.position.set(px, py, pz); camera.rotation.set(pt, yw, 0, "YXZ"); renderer.render(scene, camera); },
       rooms: () => roomsList,
       // Testing: can the body walk in a straight line from a→b (colliding each step)?
-      canWalk(ax, az, bx, bz) {
-        let x = ax, z = az, feet = groundAt(ax, az, 0);
+      canWalk(ax, az, bx, bz, startFeet) {
+        let x = ax, z = az, feet = groundAt(ax, az, startFeet || 0);
         const steps = Math.ceil(Math.hypot(bx - ax, bz - az) / 5);
         for (let i = 1; i <= steps; i++) {
           const tx = ax + ((bx - ax) * i) / steps, tz = az + ((bz - az) * i) / steps;
