@@ -255,15 +255,20 @@
           </div>
 
           <div id="stair-controls" hidden>
-            <label class="field">
+            <label class="field" id="stair-ceiling-field">
               <span>Ceiling above stair (cm)</span>
               <input type="number" id="stair-ceiling" min="1" step="1" />
+            </label>
+            <label class="field" id="stair-climb-field" hidden>
+              <span>Height climbed (cm)</span>
+              <input type="number" id="stair-climb" min="1" step="1" />
             </label>
             <h3>Staircase</h3>
             <p class="muted small">The arrow points from the bottom up to the top. Doors can sit on any side except the bottom.</p>
             <label class="check"><input type="checkbox" id="stair-door-top" autocomplete="off" /> Door on top</label>
             <label class="check"><input type="checkbox" id="stair-door-left" autocomplete="off" /> Door on left</label>
             <label class="check"><input type="checkbox" id="stair-door-right" autocomplete="off" /> Door on right</label>
+            <div id="stair-door-config" class="stair-door-config"></div>
             <label class="check"><input type="checkbox" id="stair-top-marker" autocomplete="off" /> Show a “top” marker (place it by the floor this stair climbs to)</label>
           </div>
 

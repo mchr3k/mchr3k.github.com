@@ -155,8 +155,11 @@
       }
       return cache[key];
     };
+    // "collider"/"ground" boxes are invisible (they only block or carry the walk
+    // surface); everything else is drawn.
+    const hidden = (k) => k === "collider" || k === "ground";
     for (const b of data.boxes) {
-      if (b.kind !== "collider") { // "collider" boxes block but aren't drawn
+      if (!hidden(b.kind)) {
         const geo = new THREE.BoxGeometry(b.w, b.h, b.d);
         const mesh = new THREE.Mesh(geo, matFor(b.color, b.kind));
         mesh.position.set(b.cx, b.z + b.h / 2, b.cy);
@@ -167,9 +170,20 @@
         if (b.kind !== "ceiling" && b.kind !== "glass") addEdges(geo, mesh.position, ry);
       }
       if ((b.kind === "wall" || b.kind === "collider") && b.z < 150 && b.z + b.h > 40) colliders.push(b);
-      if (b.kind === "floor" || b.kind === "stair") grounds.push(b);
+      if (b.kind === "ground" || b.kind === "floor" || b.kind === "stair") grounds.push(b);
     }
+    // Floors & ceilings are flat outline polygons (with stairwell holes cut out).
+    for (const p of data.polys || []) buildPolyFloor(p);
     for (const s of data.stairs || []) buildStair(s);
+
+    // A glowing bulb hanging just under each room's ceiling (both quality tiers).
+    const orbGeo = new THREE.SphereGeometry(9, 16, 12);
+    const orbMat = new THREE.MeshBasicMaterial({ color: "#fff6d8" });
+    for (const r of roomsList) {
+      const orb = new THREE.Mesh(orbGeo, orbMat);
+      orb.position.set((r.minx + r.maxx) / 2, r.z1 - 16, (r.miny + r.maxy) / 2);
+      scene.add(orb);
+    }
 
     // Desktop only: a soft point light near each room's ceiling (capped for perf).
     if (hiQual) {
@@ -187,6 +201,27 @@
     camera.position.set(data.spawn.x, groundY + EYE, data.spawn.y);
     yaw = 0; pitch = -0.12; flyOffset = 0; // start looking very slightly down into the room
     onResize();
+  }
+
+  // A flat floor/ceiling drawn to the room's real outline (a plan-space polygon),
+  // with any stairwell openings cut out as holes, laid flat at height p.z.
+  function buildPolyFloor(p) {
+    if (!p.points || p.points.length < 3) return;
+    const shape = new THREE.Shape(p.points.map(([x, y]) => new THREE.Vector2(x, y)));
+    for (const hole of p.holes || []) {
+      if (hole.length < 3) continue;
+      shape.holes.push(new THREE.Path(hole.map(([x, y]) => new THREE.Vector2(x, y))));
+    }
+    const geo = new THREE.ShapeGeometry(shape);
+    // ShapeGeometry lies in the XY plane (z = 0); remap (x, y) -> (x, height, y)
+    // so it lies flat at p.z.
+    const pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++) pos.setXYZ(i, pos.getX(i), p.z, pos.getY(i));
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
+    const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: p.color, side: THREE.DoubleSide }));
+    if (hiQual) mesh.receiveShadow = true;
+    scene.add(mesh);
   }
 
   // Custom stair mesh: a diagonal soffit (the understair-cupboard roof, with the
@@ -210,14 +245,16 @@
     buildStairSide(s, s.br, s.tr, s.doors.right);
   }
 
-  function buildStairSide(s, low, high, hasDoor) {
+  function buildStairSide(s, low, high, door) {
     const runLen = Math.hypot(high[0] - low[0], high[1] - low[1]) || 1;
     const rise = s.rise;
     const soffitH = (a) => (rise * a) / runLen; // roof height along the run
     const shape = new THREE.Shape();
     shape.moveTo(0, 0); shape.lineTo(runLen, 0); shape.lineTo(runLen, rise); shape.lineTo(0, 0);
-    if (hasDoor) {
-      const dw = s.doorWidth, dL = runLen / 2 - dw / 2, dR = runLen / 2 + dw / 2;
+    if (door) {
+      // The doorway, positioned along the run (pos = cm up from the bottom).
+      const dw = Math.min(door.width, runLen), c = Math.max(dw / 2, Math.min(runLen - dw / 2, door.pos));
+      const dL = c - dw / 2, dR = c + dw / 2;
       const topAt = (a) => Math.max(5, Math.min(s.doorHeight, soffitH(a) - 2)); // stay under the soffit
       const hole = new THREE.Path();
       hole.moveTo(dL, 0); hole.lineTo(dR, 0);
@@ -331,10 +368,14 @@
   }
 
   function onKey(down) {
+    // Only movement keys — no keyboard "fly up / down" (that stays on the
+    // on-screen ⤒ ⤓ buttons).
+    const moveKeys = ["keyw", "keya", "keys", "keyd", "arrowup", "arrowdown", "arrowleft", "arrowright"];
     return (e) => {
       if (!active) return;
       const c = e.code.toLowerCase();
-      if (["keyw", "keya", "keys", "keyd", "space", "arrowup", "arrowdown", "arrowleft", "arrowright", "shiftleft", "shiftright"].includes(c)) e.preventDefault();
+      if (!moveKeys.includes(c)) return;
+      e.preventDefault();
       keys[c] = down;
     };
   }
