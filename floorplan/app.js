@@ -890,18 +890,21 @@
       "data-obj": obj.id,
     });
 
+    const isStair = obj.type === "stair", isTop = obj.type === "stairtop";
     g.appendChild(
       svgEl("polygon", {
         points: pointsStr(geo.corners),
-        fill: obj.color,
-        "fill-opacity": 0.92,
+        fill: isStair ? "#e2e8f0" : isTop ? "#fde68a" : obj.color,
+        "fill-opacity": isStair ? 0.95 : 0.92,
         stroke: sel ? "#2563eb" : "#475569",
         "stroke-width": sel ? 3 : 1.5,
         style: "cursor:move",
       })
     );
 
-    drawObjectName(g, obj, geo.center);
+    if (isStair) drawStairBody(g, room, obj, geo);
+    else if (isTop) drawStairTopBody(g, room, obj, geo);
+    else drawObjectName(g, obj, geo.center);
 
     collectEdgeLabels(geo, room.id, obj.id, sel, room.color);
     if (drag && drag.type === "object" && drag.obj === obj && dragLayer) {
@@ -913,6 +916,75 @@
     }
     if (sel) drawHandles(g, geo);
     svg.appendChild(g);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Staircases
+  // ---------------------------------------------------------------------------
+  // Local (object) cm -> screen, honouring the object's rotation.
+  function objLocalToScreen(room, obj) {
+    const rot = obj.rot || 0, ox = room.x + obj.x, oy = room.y + obj.y, cx = obj.w / 2, cy = obj.h / 2;
+    return (lx, ly) => {
+      const [rx, ry] = rot ? rotatePoint(lx, ly, cx, cy, rot) : [lx, ly];
+      return worldToScreen(ox + rx, oy + ry);
+    };
+  }
+
+  // A staircase: run along local y (top at y=0, bottom at y=h), tread lines
+  // across it and an UP arrow from bottom to top; doors optional on top/left/right.
+  function drawStairBody(g, room, obj, geo) {
+    const toS = objLocalToScreen(room, obj);
+    const w = obj.w, h = obj.h;
+    const step = clamp(h / Math.max(3, Math.round(h / 28)), 12, 40);
+    for (let y = step; y < h - 0.5; y += step) {
+      const p1 = toS(0, y), p2 = toS(w, y);
+      g.appendChild(svgEl("line", { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1], stroke: "#64748b", "stroke-width": 1, style: "pointer-events:none" }));
+    }
+    // UP arrow (bottom -> top)
+    const tail = toS(w / 2, h * 0.85), head = toS(w / 2, h * 0.15);
+    g.appendChild(svgEl("line", { x1: tail[0], y1: tail[1], x2: head[0], y2: head[1], stroke: "#334155", "stroke-width": 2, style: "pointer-events:none" }));
+    const bx = Math.min(w * 0.18, 12), by = Math.min(h * 0.1, 16);
+    const a1 = toS(w / 2 - bx, h * 0.15 + by), a2 = toS(w / 2 + bx, h * 0.15 + by);
+    g.appendChild(svgEl("polyline", { points: `${a1[0]},${a1[1]} ${head[0]},${head[1]} ${a2[0]},${a2[1]}`, fill: "none", stroke: "#334155", "stroke-width": 2, style: "pointer-events:none" }));
+    drawStairDoors(g, toS, obj);
+    // Name near the bottom end so it doesn't fight the treads/arrow.
+    const nb = toS(w / 2, h * 0.94);
+    g.appendChild(svgEl("text", { x: nb[0], y: nb[1], "text-anchor": "middle", "font-size": 12, "font-weight": 600, fill: "#1f2933", "font-family": "system-ui, sans-serif", style: "pointer-events:none; user-select:none" }, obj.name));
+  }
+
+  // Doors on a staircase's sides (never the bottom): open the edge with a leaf
+  // + swing arc, like a room door.
+  function drawStairDoors(g, toS, obj) {
+    const w = obj.w, h = obj.h;
+    const sides = [
+      { on: obj.doors && obj.doors.top, a: [0, 0], b: [w, 0], out: [0, -1] },
+      { on: obj.doors && obj.doors.left, a: [0, 0], b: [0, h], out: [-1, 0] },
+      { on: obj.doors && obj.doors.right, a: [w, 0], b: [w, h], out: [1, 0] },
+    ];
+    for (const s of sides) {
+      if (!s.on) continue;
+      const len = Math.hypot(s.b[0] - s.a[0], s.b[1] - s.a[1]) || 1;
+      const ed = [(s.b[0] - s.a[0]) / len, (s.b[1] - s.a[1]) / len];
+      const dw = Math.min(70, len * 0.7);
+      const mid = [(s.a[0] + s.b[0]) / 2, (s.a[1] + s.b[1]) / 2];
+      const j1L = [mid[0] - ed[0] * dw / 2, mid[1] - ed[1] * dw / 2];
+      const j2L = [mid[0] + ed[0] * dw / 2, mid[1] + ed[1] * dw / 2];
+      const tipL = [j1L[0] + s.out[0] * dw, j1L[1] + s.out[1] * dw];
+      const j1 = toS(j1L[0], j1L[1]), j2 = toS(j2L[0], j2L[1]), tip = toS(tipL[0], tipL[1]);
+      maskWall(g, j1, j2);
+      g.appendChild(svgEl("line", { x1: j1[0], y1: j1[1], x2: tip[0], y2: tip[1], stroke: "#475569", "stroke-width": 2, style: "pointer-events:none" }));
+      g.appendChild(svgEl("path", { d: arcPath(j1[0], j1[1], dist(j1, tip), j2, tip), fill: "none", stroke: "#64748b", "stroke-width": 1, "stroke-dasharray": "3 3", style: "pointer-events:none" }));
+    }
+  }
+
+  // A small marker for where a staircase arrives on the floor above.
+  function drawStairTopBody(g, room, obj, geo) {
+    const toS = objLocalToScreen(room, obj);
+    const w = obj.w, h = obj.h;
+    const a = toS(w * 0.28, h * 0.55), b = toS(w * 0.5, h * 0.28), c = toS(w * 0.72, h * 0.55);
+    g.appendChild(svgEl("polyline", { points: `${a[0]},${a[1]} ${b[0]},${b[1]} ${c[0]},${c[1]}`, fill: "none", stroke: "#a16207", "stroke-width": 2.5, style: "pointer-events:none" }));
+    const nb = toS(w / 2, h * 0.8);
+    g.appendChild(svgEl("text", { x: nb[0], y: nb[1], "text-anchor": "middle", "font-size": 11, "font-weight": 600, fill: "#713f12", "font-family": "system-ui, sans-serif", style: "pointer-events:none; user-select:none" }, obj.name));
   }
 
   // ---------------------------------------------------------------------------
@@ -1888,7 +1960,8 @@
     if (!hasSel) return;
 
     const item = r.item;
-    el("panel-title").textContent = r.kind === "room" ? "Room" : "Object";
+    const isStair = r.kind === "object" && item.type === "stair";
+    el("panel-title").textContent = r.kind === "room" ? "Room" : isStair ? "Staircase" : (r.kind === "object" && item.type === "stairtop") ? "Staircase top" : "Object";
     el("f-name").value = item.name;
     el("f-w").value = round(item.w);
     el("f-h").value = round(item.h);
@@ -1901,6 +1974,15 @@
     const rotField = el("f-rot-field");
     rotField.hidden = r.kind !== "object";
     if (r.kind === "object") el("f-rot").value = String(item.rot || 0);
+
+    const stairCtl = el("stair-controls");
+    stairCtl.hidden = !isStair;
+    if (isStair) {
+      el("stair-door-top").checked = !!item.doors.top;
+      el("stair-door-left").checked = !!item.doors.left;
+      el("stair-door-right").checked = !!item.doors.right;
+      el("stair-top-marker").checked = !!findStairTop(item.id);
+    }
 
     const walls = el("room-walls");
     walls.hidden = r.kind !== "room";
@@ -2336,6 +2418,52 @@
     select({ kind: "object", roomId: room.id, objId: obj.id });
   }
 
+  function selectedRoom() {
+    const r = resolveSel();
+    if (r) return r.room;
+    if (state.rooms.length === 1) return state.rooms[0];
+    return null;
+  }
+
+  function addStair() {
+    const room = selectedRoom();
+    if (!room) { alert("Select the room you want to add the staircase to first."); return; }
+    const obj = {
+      id: uid("o"), name: "Stairs", type: "stair",
+      x: snapVal(room.w / 2 - 50), y: snapVal(room.h / 2 - 120),
+      w: 100, h: 240, rot: 0, color: "#e2e8f0",
+      doors: { top: false, left: false, right: false }, stairId: null,
+    };
+    room.objects.push(obj);
+    save();
+    select({ kind: "object", roomId: room.id, objId: obj.id });
+  }
+
+  // Find/create/remove the "staircase top" marker linked to a staircase.
+  function findStairTop(stairId) {
+    for (const rm of state.rooms) {
+      const m = (rm.objects || []).find((o) => o.type === "stairtop" && o.stairId === stairId);
+      if (m) return { room: rm, obj: m };
+    }
+    return null;
+  }
+  function setStairTop(stair, stairRoom, on) {
+    const existing = findStairTop(stair.id);
+    if (on && !existing) {
+      const m = {
+        id: uid("o"), name: "Stairs up", type: "stairtop", stairId: stair.id,
+        x: stair.x, y: stair.y - 90, w: 90, h: 56, rot: 0, color: "#fde68a",
+        doors: { top: false, left: false, right: false },
+      };
+      stairRoom.objects.push(m);
+    } else if (!on && existing) {
+      existing.room.objects = existing.room.objects.filter((o) => o.id !== existing.obj.id);
+    }
+    save();
+    render();
+    refreshPanel();
+  }
+
   function addElectric() {
     let room = null;
     const r = resolveSel();
@@ -2404,7 +2532,7 @@
     const r = resolveSel();
     if (!r) return;
     if (r.kind === "object") {
-      const clone = { ...r.obj, id: uid("o"), name: r.obj.name, x: r.obj.x + 20, y: r.obj.y + 20 };
+      const clone = { ...r.obj, id: uid("o"), name: r.obj.name, x: r.obj.x + 20, y: r.obj.y + 20, doors: { ...(r.obj.doors || {}) }, stairId: null };
       r.room.objects.push(clone);
       save();
       select({ kind: "object", roomId: r.room.id, objId: clone.id });
@@ -2434,6 +2562,10 @@
     const r = resolveSel();
     if (!r) return;
     if (r.kind === "object") {
+      // Deleting a staircase also removes its linked "top" marker.
+      if (r.obj.type === "stair") {
+        for (const rm of state.rooms) rm.objects = (rm.objects || []).filter((o) => !(o.type === "stairtop" && o.stairId === r.obj.id));
+      }
       r.room.objects = r.room.objects.filter((o) => o.id !== r.obj.id);
     } else if (r.kind === "electric") {
       r.room.electrics = (r.room.electrics || []).filter((e) => e.id !== r.elec.id);
@@ -2682,6 +2814,13 @@
         h: Math.max(1, +o.h || 50),
         rot: [0, 90, 180, 270].includes(+o.rot) ? +o.rot : 0,
         color: o.color || "#94a3b8",
+        // Object kind: "object" (default), a directional "stair", or a small
+        // "stairtop" marker for where a stair arrives on the floor above.
+        type: ["stair", "stairtop"].includes(o.type) ? o.type : "object",
+        // Doors on a staircase's sides (never the bottom).
+        doors: { top: !!(o.doors && o.doors.top), left: !!(o.doors && o.doors.left), right: !!(o.doors && o.doors.right) },
+        // A stairtop marker links back to its staircase.
+        stairId: o.stairId ? String(o.stairId) : null,
       })),
       // Wall-mounted electrics (sockets / switches). `d` is the distance in cm
       // along the room outline perimeter; `face` in = into the room, out = the
@@ -3627,6 +3766,12 @@
   el("btn-redo").addEventListener("click", redo);
   el("btn-add-room").addEventListener("click", addRoom);
   el("btn-add-object").addEventListener("click", addObject);
+  el("btn-add-stair").addEventListener("click", addStair);
+  const stairDoor = (side, on) => { const r = resolveSel(); if (r && r.kind === "object" && r.obj.type === "stair") { r.obj.doors[side] = on; save(); render(); } };
+  el("stair-door-top").addEventListener("change", (e) => stairDoor("top", e.target.checked));
+  el("stair-door-left").addEventListener("change", (e) => stairDoor("left", e.target.checked));
+  el("stair-door-right").addEventListener("change", (e) => stairDoor("right", e.target.checked));
+  el("stair-top-marker").addEventListener("change", (e) => { const r = resolveSel(); if (r && r.kind === "object" && r.obj.type === "stair") setStairTop(r.obj, r.room, e.target.checked); });
   el("btn-add-electric").addEventListener("click", addElectric);
   el("btn-electric-done").addEventListener("click", () => select(null));
   const electricSet = (key, val) => {
