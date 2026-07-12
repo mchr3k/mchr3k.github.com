@@ -202,6 +202,10 @@
     camera.position.set(data.spawn.x, eyeY, data.spawn.y);
     yaw = 0; pitch = -0.12; flyOffset = 0; // start looking very slightly down into the room
     onResize();
+    // Dev/testing hook: pose the camera and render one frame for a headless
+    // screenshot (see floorplan/dev/render3d.cjs and floorplan/CLAUDE.md). Inert in
+    // normal use — the walk loop resumes on any input.
+    window.__walk3d = { view(px, py, pz, yw, pt) { active = false; camera.position.set(px, py, pz); camera.rotation.set(pt, yw, 0, "YXZ"); renderer.render(scene, camera); }, rooms: () => roomsList };
   }
 
   // A flat floor/ceiling drawn to the room's real outline (a plan-space polygon),
