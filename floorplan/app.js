@@ -1992,8 +1992,26 @@
       el("stair-door-top").checked = !!item.doors.top;
       el("stair-door-left").checked = !!item.doors.left;
       el("stair-door-right").checked = !!item.doors.right;
-      el("stair-top-marker").checked = !!findStairTop(item.id);
+      const top = findStairTop(item.id);
+      el("stair-top-marker").checked = !!top;
       el("stair-ceiling").value = round(item.ceiling || 300);
+      // Floor-above selector: only when a top marker exists.
+      const floorField = el("stair-top-floor-field");
+      floorField.hidden = !top;
+      if (top) {
+        const sel = el("stair-top-floor");
+        sel.replaceChildren();
+        const none = document.createElement("option");
+        none.value = ""; none.textContent = "— none —";
+        sel.appendChild(none);
+        for (const l of doc.layouts) {
+          if (l.id === doc.activeId) continue;
+          const opt = document.createElement("option");
+          opt.value = l.id; opt.textContent = l.name;
+          if (top.obj.targetLayout === l.id) opt.selected = true;
+          sel.appendChild(opt);
+        }
+      }
     }
 
     const walls = el("room-walls");
@@ -2477,10 +2495,12 @@
   function setStairTop(stair, stairRoom, on) {
     const existing = findStairTop(stair.id);
     if (on && !existing) {
+      const otherFloor = doc.layouts.find((l) => l.id !== doc.activeId);
       const m = {
         id: uid("o"), name: "Stairs up", type: "stairtop", stairId: stair.id,
         x: stair.x, y: stair.y - 90, w: 90, h: 56, rot: 0, color: "#fde68a",
         doors: { top: false, left: false, right: false },
+        targetLayout: otherFloor ? otherFloor.id : null,
       };
       stairRoom.objects.push(m);
     } else if (!on && existing) {
@@ -2728,10 +2748,9 @@
     return { cx, cy, z, w, d, h, color, kind, rot: rot || 0 };
   }
 
-  function stairBoxes3(out, room, obj) {
+  function stairBoxes3(out, room, obj, zBase, rise) {
     const rot = obj.rot || 0;
-    const rise = room.height || 300; // one storey up
-    const N = clamp(Math.round(rise / 18), 3, 26);
+    const N = clamp(Math.round(rise / 18), 3, 30);
     const toWorld = (lx, ly) => {
       const [rx, ry] = rot ? rotatePoint(lx, ly, obj.w / 2, obj.h / 2, rot) : [lx, ly];
       return [room.x + obj.x + rx, room.y + obj.y + ry];
@@ -2740,26 +2759,33 @@
       // Treads climb from the bottom end (local y=h) up to the top (y=0).
       const yc = obj.h - (i + 0.5) * (obj.h / N);
       const [wx, wy] = toWorld(obj.w / 2, yc);
-      out.push(box3(wx, wy, 0, obj.w, obj.h / N, (i + 1) * (rise / N), "#94a3b8", "stair", rot));
+      out.push(box3(wx, wy, zBase, obj.w, obj.h / N, (i + 1) * (rise / N), "#94a3b8", "stair", rot));
     }
+    // A small landing at the very top so you always have somewhere to stand
+    // when you reach the floor above.
+    const [lx, ly] = toWorld(obj.w / 2, obj.h * 0.05);
+    out.push(box3(lx, ly, zBase + rise, obj.w, Math.max(20, obj.h * 0.14), 4, "#cbd5e1", "floor", rot));
   }
 
-  function build3DScene() {
-    const boxes = [];
-    const T = 10; // wall thickness (cm)
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  function floorHeight3(layout) {
+    let h = 300;
+    for (const r of layout.rooms || []) h = Math.max(h, r.height || 300);
+    return h;
+  }
 
-    for (const room of state.rooms) {
+  // Emit one floor's geometry, lifted by zBase.
+  function buildLayoutBoxes3(layout, zBase, boxes, bounds) {
+    const T = 10;
+    for (const room of layout.rooms) {
       const H = room.height || 300;
       const poly = itemLocalGeometry(room).points.map(([lx, ly]) => [room.x + lx, room.y + ly]);
       const xs = poly.map((p) => p[0]), ys = poly.map((p) => p[1]);
       const rminx = Math.min(...xs), rmaxx = Math.max(...xs), rminy = Math.min(...ys), rmaxy = Math.max(...ys);
-      minX = Math.min(minX, rminx); minY = Math.min(minY, rminy); maxX = Math.max(maxX, rmaxx); maxY = Math.max(maxY, rmaxy);
-      // floor + ceiling slabs (AABB — fine for near-rectangular rooms)
-      boxes.push(box3((rminx + rmaxx) / 2, (rminy + rmaxy) / 2, -4, rmaxx - rminx, rmaxy - rminy, 4, room.color, "floor", 0));
-      boxes.push(box3((rminx + rmaxx) / 2, (rminy + rmaxy) / 2, H, rmaxx - rminx, rmaxy - rminy, 4, "#e2e8f0", "ceiling", 0));
+      bounds.minX = Math.min(bounds.minX, rminx); bounds.minY = Math.min(bounds.minY, rminy);
+      bounds.maxX = Math.max(bounds.maxX, rmaxx); bounds.maxY = Math.max(bounds.maxY, rmaxy);
+      boxes.push(box3((rminx + rmaxx) / 2, (rminy + rmaxy) / 2, zBase - 4, rmaxx - rminx, rmaxy - rminy, 4, room.color, "floor", 0));
+      boxes.push(box3((rminx + rmaxx) / 2, (rminy + rmaxy) / 2, zBase + H, rmaxx - rminx, rmaxy - rminy, 4, "#e2e8f0", "ceiling", 0));
 
-      // walls with door / window openings
       for (const seg of roomSegments(room)) {
         const [dx, dy] = seg.dir;
         const horiz = Math.abs(dx) > 0.5;
@@ -2777,13 +2803,13 @@
         const wall = (a, b, z0, z1) => {
           if (b - a < 1 || z1 - z0 < 1) return;
           const cx = sxw + dx * ((a + b) / 2), cy = syw + dy * ((a + b) / 2), along = b - a;
-          boxes.push(box3(cx, cy, z0, horiz ? along : T, horiz ? T : along, z1 - z0, "#cbd5e1", "wall", 0));
+          boxes.push(box3(cx, cy, zBase + z0, horiz ? along : T, horiz ? T : along, z1 - z0, "#cbd5e1", "wall", 0));
         };
         let cursor = 0;
         for (const h of holes) {
           wall(cursor, h.a, 0, H);
-          if (h.sill > 0) wall(h.a, h.b, 0, h.sill);      // wall below a window
-          if (h.top < H) wall(h.a, h.b, h.top, H);        // lintel above the opening
+          if (h.sill > 0) wall(h.a, h.b, 0, h.sill);
+          if (h.top < H) wall(h.a, h.b, h.top, H);
           cursor = Math.max(cursor, h.b);
         }
         wall(cursor, seg.len, 0, H);
@@ -2791,9 +2817,16 @@
 
       for (const obj of room.objects || []) {
         const cx = room.x + obj.x + obj.w / 2, cy = room.y + obj.y + obj.h / 2;
-        if (obj.type === "stair") { stairBoxes3(boxes, room, obj); continue; }
-        if (obj.type === "stairtop") { boxes.push(box3(cx, cy, obj.elevation || 0, obj.w, obj.h, 8, "#f59e0b", "stairtop", obj.rot || 0)); continue; }
-        boxes.push(box3(cx, cy, obj.elevation || 0, obj.w, obj.h, obj.objHeight || 50, obj.color, "object", obj.rot || 0));
+        if (obj.type === "stair") {
+          // A stair with a linked top marker climbs a full storey to the floor
+          // above; otherwise it's a local ramp of its own height.
+          const top = findStairTop(obj.id);
+          const rise = (top && top.obj.targetLayout) ? floorHeight3(layout) : (obj.objHeight || H);
+          stairBoxes3(boxes, room, obj, zBase, rise);
+          continue;
+        }
+        if (obj.type === "stairtop") { boxes.push(box3(cx, cy, zBase + (obj.elevation || 0), obj.w, obj.h, 8, "#f59e0b", "stairtop", obj.rot || 0)); continue; }
+        boxes.push(box3(cx, cy, zBase + (obj.elevation || 0), obj.w, obj.h, obj.objHeight || 50, obj.color, "object", obj.rot || 0));
       }
       for (const e of room.electrics || []) {
         const p = perimeterPoint(room, e.d);
@@ -2801,12 +2834,38 @@
         const n = e.face === "out" ? p.outward : p.inward;
         const cx = room.x + p.lx + n[0] * 3, cy = room.y + p.ly + n[1] * 3;
         const W = e.size === "double" ? 15 : 9, horiz = Math.abs(p.dir[0]) > 0.5;
-        boxes.push(box3(cx, cy, e.elevation != null ? e.elevation : 30, horiz ? W : 4, horiz ? 4 : W, 8, e.kind === "switch" ? "#a78bfa" : "#6d28d9", "electric", 0));
+        boxes.push(box3(cx, cy, zBase + (e.elevation != null ? e.elevation : 30), horiz ? W : 4, horiz ? 4 : W, 8, e.kind === "switch" ? "#a78bfa" : "#6d28d9", "electric", 0));
       }
     }
-    const r0 = state.rooms[0];
+  }
+
+  function build3DScene() {
+    const boxes = [];
+    const bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+    const active = doc.layouts.find((l) => l.id === doc.activeId) || doc.layouts[0];
+    if (!active) return { boxes, bounds, spawn: { x: 0, y: 0 } };
+    // Stack the active floor (z=0) plus every floor reachable up through a
+    // staircase top marker, each one storey higher.
+    const placed = { [active.id]: 0 };
+    const queue = [active];
+    while (queue.length) {
+      const layout = queue.shift();
+      const base = placed[layout.id], fh = floorHeight3(layout);
+      for (const room of layout.rooms) {
+        for (const obj of room.objects || []) {
+          if (obj.type === "stairtop" && obj.targetLayout && !(obj.targetLayout in placed)) {
+            const tl = doc.layouts.find((l) => l.id === obj.targetLayout);
+            if (tl) { placed[tl.id] = base + fh; queue.push(tl); }
+          }
+        }
+      }
+    }
+    for (const layout of doc.layouts) {
+      if (layout.id in placed) buildLayoutBoxes3(layout, placed[layout.id], boxes, bounds);
+    }
+    const r0 = active.rooms[0];
     const spawn = r0 ? { x: r0.x + r0.w / 2, y: r0.y + r0.h / 2 } : { x: 0, y: 0 };
-    return { boxes, bounds: { minX, minY, maxX, maxY }, spawn };
+    return { boxes, bounds, spawn };
   }
   window.__plan3d = { build: build3DScene };
 
@@ -2945,6 +3004,9 @@
         doors: { top: !!(o.doors && o.doors.top), left: !!(o.doors && o.doors.left), right: !!(o.doors && o.doors.right) },
         // A stairtop marker links back to its staircase.
         stairId: o.stairId ? String(o.stairId) : null,
+        // For a stairtop marker: the id of the layout (floor) this stair climbs
+        // up to. In 3D that floor is stacked one storey above.
+        targetLayout: o.targetLayout ? String(o.targetLayout) : null,
         // 3D: object height (cm, default 50) and height off the ground (default 0).
         // A staircase uses `ceiling` for the headroom above it (default 3 m).
         objHeight: Math.max(1, Math.round(+o.objHeight || (o.type === "stair" ? Math.max(1, Math.round(+r.height || 300)) : 50))),
@@ -3903,6 +3965,12 @@
   el("stair-door-left").addEventListener("change", (e) => stairDoor("left", e.target.checked));
   el("stair-door-right").addEventListener("change", (e) => stairDoor("right", e.target.checked));
   el("stair-top-marker").addEventListener("change", (e) => { const r = resolveSel(); if (r && r.kind === "object" && r.obj.type === "stair") setStairTop(r.obj, r.room, e.target.checked); });
+  el("stair-top-floor").addEventListener("change", (e) => {
+    const r = resolveSel();
+    if (!r || r.kind !== "object" || r.obj.type !== "stair") return;
+    const top = findStairTop(r.obj.id);
+    if (top) { top.obj.targetLayout = e.target.value || null; save(); }
+  });
   el("btn-add-electric").addEventListener("click", addElectric);
   el("btn-electric-done").addEventListener("click", () => select(null));
   const electricSet = (key, val) => {
