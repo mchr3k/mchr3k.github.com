@@ -169,6 +169,7 @@
     }
     // Floors & ceilings are flat outline polygons (with stairwell holes cut out).
     for (const p of data.polys || []) buildPolyFloor(p);
+    for (const r of data.rails || []) buildRail(r);
     for (const s of data.stairs || []) buildStair(s);
 
     // A glowing bulb + a warm point light hanging under every room's ceiling.
@@ -226,6 +227,24 @@
     geo.computeVertexNormals();
     const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: p.color, side: THREE.DoubleSide }));
     if (hiQual) mesh.receiveShadow = true;
+    scene.add(mesh);
+  }
+
+  // A banister rail whose foot follows a raking floor (alongside split-level
+  // steps): a vertical strip from each floor point up by `h`. pts = [x, planY, z].
+  function buildRail(r) {
+    if (!r.pts || r.pts.length < 2) return;
+    const pos = [];
+    for (let i = 0; i < r.pts.length - 1; i++) {
+      const [ax, ay, az] = r.pts[i], [bx, by, bz] = r.pts[i + 1];
+      const a0 = [ax, az, ay], b0 = [bx, bz, by], a1 = [ax, az + r.h, ay], b1 = [bx, bz + r.h, by];
+      pos.push(...a0, ...b0, ...b1, ...a0, ...b1, ...a1);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    g.computeVertexNormals();
+    const mesh = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: r.color, side: THREE.DoubleSide }));
+    if (hiQual) { mesh.castShadow = true; mesh.receiveShadow = true; }
     scene.add(mesh);
   }
 

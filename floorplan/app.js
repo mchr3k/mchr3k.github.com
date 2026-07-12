@@ -2982,6 +2982,14 @@
     return holes;
   }
 
+  // Distance from point (px,py) to segment (ax,ay)-(bx,by).
+  function distToSeg(px, py, ax, ay, bx, by) {
+    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+    let t = l2 ? ((px - ax) * dx + (py - ay) * dy) / l2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(px - (ax + dx * t), py - (ay + dy * t));
+  }
+
   // Clip a polygon to the half-plane { p : sign*(p[axis]-coord) >= 0 } (axis 0=x,
   // 1=y). Used to split a room's floor into two levels at a within-room stair.
   function clipHalfplane(poly, axis, coord, sign) {
@@ -3023,7 +3031,7 @@
   // holes from `wells`); `wells` are world-space openings between stacked floors.
   // `elev` raises a whole room (split-level), `splits` splits one room's floor at
   // a within-room stair.
-  function buildFloorBoxes3(rooms, T, boxes, polys, stairs, roomsOut, bounds, wells, elev, splits, openFaces) {
+  function buildFloorBoxes3(rooms, T, boxes, polys, stairs, roomsOut, bounds, wells, elev, splits, openEdges, rails) {
     const WT = 1, OX = T.tx, OY = T.ty; // walls are ~zero thickness
     const floorOps = floorOpenings3(rooms, OX, OY, elev);
     for (const room of rooms) {
@@ -3108,10 +3116,29 @@
         // A cut-in / cut-out marked as a banister renders its own edges as a low
         // rail; the room's outer-boundary walls stay full height.
         const nb = seg.notchId ? (room.notches || []).find((n) => n.id === seg.notchId) : null;
-        // The face of a banister cut-in that a stair arrives through is left fully
-        // open (you step off the stairs there); its two sides stay railed.
-        if (nb && nb.banister && seg.notchEdge === "face" && openFaces && openFaces.has(nb.id)) continue;
+        // The edge of a banister cut-in where the stair arrives is left fully open
+        // (you step off the stairs there); the other two edges stay railed.
+        if (nb && nb.banister && openEdges && openEdges.get(nb.id) === seg.notchEdge) continue;
         const segH = nb && nb.banister ? clamp(nb.banisterHeight || 100, 1, WH) : WH;
+        // A banister edge running alongside a split's steps rakes down with them:
+        // draw it as a rail whose foot follows the floor level, not a flat wall.
+        if (nb && nb.banister && split && rails) {
+          const floorAt = (coord) => {
+            if (split.sign * (coord - split.coord) >= 0) return OZ + split.rise; // raised side
+            if (split.runLo != null && split.runHi > split.runLo) // ramp down over the stair run
+              return OZ + split.rise * Math.max(0, Math.min(1, (coord - split.runLo) / (split.runHi - split.runLo)));
+            return OZ;
+          };
+          const N = 24, pts = [];
+          let lo = Infinity, hi = -Infinity;
+          for (let i = 0; i <= N; i++) {
+            const m = (seg.len * i) / N, coord = split.axis === 0 ? sxw + dx * m : syw + dy * m;
+            const fz = floorAt(coord);
+            lo = Math.min(lo, fz); hi = Math.max(hi, fz);
+            pts.push([sxw + dx * m, syw + dy * m, fz]);
+          }
+          if (hi - lo > 2) { rails.push({ pts, h: segH, color: WALL_COLOR3 }); continue; }
+        }
         const holes = [];
         for (const p of layoutSegment(seg)) {
           if (!p.type) continue;
@@ -3204,10 +3231,10 @@
   // of rooms; stairs (via their top marker) link a floor to the one above, which
   // is stacked a storey up and shifted so the marker sits over the stair top.
   function build3DScene() {
-    const boxes = [], polys = [], stairs = [], rooms3 = [], wells = [], openFaces = new Set();
+    const boxes = [], polys = [], stairs = [], rooms3 = [], rails = [], wells = [], openEdges = new Map();
     const bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
     const rooms = state.rooms;
-    if (!rooms.length) return { boxes, polys, stairs, rooms: rooms3, bounds, spawn: { x: 0, y: 0 } };
+    if (!rooms.length) return { boxes, polys, stairs, rails, rooms: rooms3, bounds, spawn: { x: 0, y: 0 } };
 
     const comps = floorComponents(rooms);
     const compOf = {};
@@ -3251,9 +3278,20 @@
             const mr = top.obj.rot || 0, mhx = (mr % 180) ? top.obj.h / 2 : top.obj.w / 2, mhy = (mr % 180) ? top.obj.w / 2 : top.obj.h / 2;
             wells.push({ minx: stx - mhx, maxx: stx + mhx, miny: sty - mhy, maxy: sty + mhy, z: tf[tci].z });
           } else {
-            // The stairs arrive through the banister cut-in: open its inner face
-            // (leave the two sides railed) so you step off the stairs into the room.
-            openFaces.add(banisterNotch.id);
+            // The stairs arrive through the banister cut-in: open the edge nearest
+            // where they arrive (you step off there) and leave the other two railed.
+            const Tt = tf[tci], n = banisterNotch, S = SIDES[n.side];
+            const [nsx, nsy] = S.start(target), nd = S.dir, no = [nd[1], -nd[0]];
+            const P0 = [nsx + nd[0] * n.pos, nsy + nd[1] * n.pos], P1 = [nsx + nd[0] * (n.pos + n.width), nsy + nd[1] * (n.pos + n.width)];
+            const Fa = [P0[0] + no[0] * n.depth, P0[1] + no[1] * n.depth], Fb = [P1[0] + no[0] * n.depth, P1[1] + no[1] * n.depth];
+            const W = (p) => [target.x + p[0] + Tt.tx, target.y + p[1] + Tt.ty];
+            const edges = { face: [W(Fa), W(Fb)], side1: [W(P0), W(Fa)], side2: [W(P1), W(Fb)] };
+            let best = "face", bd = Infinity;
+            for (const k of ["face", "side1", "side2"]) {
+              const [a, b] = edges[k], d = distToSeg(stx, sty, a[0], a[1], b[0], b[1]);
+              if (d < bd) { bd = d; best = k; }
+            }
+            openEdges.set(n.id, best);
           }
         }
       }
@@ -3280,8 +3318,9 @@
           // Where the stair itself sits along the step line (so the riser / rail is
           // drawn only beside the stair, not blocking the steps).
           const sc = [[0, 0], [obj.w, 0], [obj.w, obj.h], [0, obj.h]].map(([lx, ly]) => (rot ? rotatePoint(lx, ly, obj.w / 2, obj.h / 2, rot) : [lx, ly]));
-          const sw = sc.map(([px, py]) => (axis === 0 ? room.y + obj.y + py + T.ty : room.x + obj.x + px + T.tx));
-          splits[room.id] = { axis, coord, sign, rise, gapLo: Math.min(...sw), gapHi: Math.max(...sw) };
+          const sw = sc.map(([px, py]) => (axis === 0 ? room.y + obj.y + py + T.ty : room.x + obj.x + px + T.tx)); // across the step line
+          const sr = sc.map(([px, py]) => (axis === 0 ? room.x + obj.x + px + T.tx : room.y + obj.y + py + T.ty)); // along the step line (the run)
+          splits[room.id] = { axis, coord, sign, rise, gapLo: Math.min(...sw), gapHi: Math.max(...sw), runLo: Math.min(...sr), runHi: Math.max(...sr) };
           for (const rb of c) {
             if (rb.id === room.id) continue;
             const v = axis === 0 ? rb.x + rb.w / 2 + T.tx : rb.y + rb.h / 2 + T.ty;
@@ -3311,10 +3350,10 @@
       }
     });
 
-    comps.forEach((c, ci) => buildFloorBoxes3(c, tf[ci], boxes, polys, stairs, rooms3, bounds, wells, elev, splits, openFaces));
+    comps.forEach((c, ci) => buildFloorBoxes3(c, tf[ci], boxes, polys, stairs, rooms3, bounds, wells, elev, splits, openEdges, rails));
 
     const r0 = rooms[0];
-    return { boxes, polys, stairs, rooms: rooms3, bounds, spawn: { x: r0.x + r0.w / 2, y: r0.y + r0.h / 2 } };
+    return { boxes, polys, stairs, rails, rooms: rooms3, bounds, spawn: { x: r0.x + r0.w / 2, y: r0.y + r0.h / 2 } };
   }
   window.__plan3d = { build: build3DScene };
 
