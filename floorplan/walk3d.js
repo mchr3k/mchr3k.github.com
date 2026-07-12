@@ -62,10 +62,13 @@
   }
 
   // Resolve the camera circle out of any wall box it overlaps (axis-aligned).
-  function collide(x, z) {
+  // Only walls that overlap the body's height at `feetY` block — so a wall on the
+  // floor above (or below) doesn't stop you even though it shares this x,z.
+  function collide(x, z, feetY) {
     for (let iter = 0; iter < 3; iter++) {
       let hit = false;
       for (const b of colliders) {
+        if (b.z >= feetY + 160 || b.z + b.h <= feetY + 10) continue; // wrong storey
         const hw = b.w / 2 + RADIUS, hd = b.d / 2 + RADIUS;
         const dx = x - b.cx, dz = z - b.cy;
         if (Math.abs(dx) < hw && Math.abs(dz) < hd) {
@@ -159,7 +162,9 @@
         if (ry) mesh.rotation.y = ry;
         if (hiQual && !trans(b.kind)) { mesh.castShadow = true; mesh.receiveShadow = true; }
         scene.add(mesh);
-        if (b.kind !== "ceiling" && b.kind !== "glass") addEdges(geo, mesh.position, ry);
+        // Outline objects/frames/stairs, but not walls: a split wall's segment
+        // boundaries would draw spurious seams from each opening up to the ceiling.
+        if (b.kind !== "ceiling" && b.kind !== "glass" && b.kind !== "wall") addEdges(geo, mesh.position, ry);
       }
       // Block on tall walls (at any floor level) and colliders; low sills, lintels
       // and rails don't block. (The old `z < 150` test wrongly let you walk through
@@ -206,7 +211,22 @@
     // Dev/testing hook: pose the camera and render one frame for a headless
     // screenshot (see floorplan/dev/render3d.cjs and floorplan/CLAUDE.md). Inert in
     // normal use — the walk loop resumes on any input.
-    window.__walk3d = { view(px, py, pz, yw, pt) { active = false; camera.position.set(px, py, pz); camera.rotation.set(pt, yw, 0, "YXZ"); renderer.render(scene, camera); }, rooms: () => roomsList };
+    window.__walk3d = {
+      view(px, py, pz, yw, pt) { active = false; camera.position.set(px, py, pz); camera.rotation.set(pt, yw, 0, "YXZ"); renderer.render(scene, camera); },
+      rooms: () => roomsList,
+      // Testing: can the body walk in a straight line from a→b (colliding each step)?
+      canWalk(ax, az, bx, bz) {
+        let x = ax, z = az, feet = groundAt(ax, az, 0);
+        const steps = Math.ceil(Math.hypot(bx - ax, bz - az) / 5);
+        for (let i = 1; i <= steps; i++) {
+          const tx = ax + ((bx - ax) * i) / steps, tz = az + ((bz - az) * i) / steps;
+          const [nx, nz] = collide(tx, tz, feet);
+          if (Math.hypot(nx - tx, nz - tz) > 2) return { ok: false, at: [Math.round(tx), Math.round(tz)] };
+          feet = groundAt(nx, nz, feet); x = nx; z = nz;
+        }
+        return { ok: true, feet: Math.round(feet) };
+      },
+    };
   }
 
   // A flat floor/ceiling drawn to the room's real outline (a plan-space polygon),
@@ -369,7 +389,7 @@
     if (len > 0.01) {
       x += (fx / len) * SPEED * dt;
       z += (fz / len) * SPEED * dt;
-      [x, z] = collide(x, z);
+      [x, z] = collide(x, z, groundY);
     }
     if (keys["space"]) flyOffset += FLY * dt;
     if (keys["shiftleft"] || keys["shiftright"]) flyOffset -= FLY * dt;

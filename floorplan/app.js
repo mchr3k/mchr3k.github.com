@@ -2940,9 +2940,10 @@
   // for windows, or a leaf swung open for doors), so doorways and windows read
   // clearly in 3D. `seg` gives the wall direction/normal for the door swing.
   function openingTrim3(boxes, cxAt, cyAt, horiz, WT, OZ, h, seg) {
-    // Frame sits flush in the (near-zero-thickness) wall so it never pokes
-    // through into the neighbouring room; it reads as a frame by its colour.
-    const fc = "#475569", ft = WT, jamb = 4, hz = 6;
+    // The frame stands slightly proud of the (near-zero-thickness) wall so its
+    // slate faces win the depth test instead of z-fighting the cream wall, while
+    // only poking ~1 cm into the neighbouring room.
+    const fc = "#475569", ft = WT + 2, jamb = 4, hz = 6;
     const mid = (h.a + h.b) / 2;
     const jambBox = (m) => boxes.push(box3(cxAt(m), cyAt(m), OZ + h.sill, horiz ? jamb : ft, horiz ? ft : jamb, h.top - h.sill, fc, "frame", 0));
     jambBox(h.a); jambBox(h.b);
@@ -3183,8 +3184,10 @@
         let cursor = 0;
         for (const h of holes) {
           wall(cursor, h.a, 0, segH);
-          if (h.sill > 0) wall(h.a, h.b, 0, Math.min(h.sill, segH));
-          if (h.top < segH) wall(h.a, h.b, h.top, segH);
+          // Sill / lintel overlap the side walls by WT so their end faces are
+          // buried (no coincident-face z-fighting at the jambs).
+          if (h.sill > 0) wall(h.a - WT, h.b + WT, 0, Math.min(h.sill, segH));
+          if (h.top < segH) wall(h.a - WT, h.b + WT, h.top, segH);
           cursor = Math.max(cursor, h.b);
           if (h.own) openingTrim3(boxes, cxAt, cyAt, horiz, WT, OZ, h, seg); // frame + glass/leaf
         }
@@ -3268,11 +3271,8 @@
           const stx = room.x + obj.x + rx + T.tx, sty = room.y + obj.y + ry + T.ty; // stair top in 3D
           tf[tci] = { tx: stx - mx, ty: sty - my, z: T.z + fh };
           queue.push(tci);
-          // The "Stairs up" marker footprint is the landing where the stair joins
-          // the floor above: fill it with floor (matching that floor) so the stair
-          // top meets the upper hall with no gap. The marker itself draws nothing.
-          const lw = (top.obj.rot % 180) ? top.obj.h : top.obj.w, ld = (top.obj.rot % 180) ? top.obj.w : top.obj.h;
-          boxes.push(box3(stx, sty, tf[tci].z - 4, lw, ld, 4, target.color, "floor", 0));
+          // (No landing slab — the stair is expected to meet the floor above at
+          // its edge. The "Stairs up" marker only locates the join and draws nothing.)
           // If the floor above has a banister cut-in, that void is the stairwell
           // opening (handled below); otherwise punch a small opening at the "Stairs
           // up" marker's footprint through the floor above / ceiling below, and open
