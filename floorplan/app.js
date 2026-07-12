@@ -3130,13 +3130,15 @@
             return OZ;
           };
           // Every banister edge follows the floor level (so a rail on the raised
-          // side sits on it, and one alongside the steps rakes down with them).
-          const N = 24, pts = [];
+          // side sits on it, and one alongside the steps rakes down with them). It
+          // also drops a fascia below the floor so the stairwell edge is boxed in
+          // (visible from the storey below rather than an open floor edge).
+          const fascia = 25, N = 24, pts = [];
           for (let i = 0; i <= N; i++) {
             const m = (seg.len * i) / N, coord = split.axis === 0 ? sxw + dx * m : syw + dy * m;
-            pts.push([sxw + dx * m, syw + dy * m, floorAt(coord)]);
+            pts.push([sxw + dx * m, syw + dy * m, floorAt(coord) - fascia]);
           }
-          rails.push({ pts, h: segH, color: WALL_COLOR3 });
+          rails.push({ pts, h: segH + fascia, color: WALL_COLOR3 });
           continue;
         }
         const holes = [];
