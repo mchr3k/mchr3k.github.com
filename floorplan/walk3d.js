@@ -19,10 +19,12 @@
   const STEP_UP = 40;   // most you can step up in one go (climb stairs; stay under them)
   const PITCH_LIM = Math.PI / 2 - 0.05;
 
+  const roomHud = document.getElementById("walk3d-room");
+
   let THREE = null, renderer = null, scene = null, camera = null;
   let raf = 0, active = false, last = 0;
-  let colliders = [], grounds = [];
-  let yaw = 0, pitch = 0, flyOffset = 0, groundY = 0;
+  let colliders = [], grounds = [], roomsList = [];
+  let yaw = 0, pitch = 0, flyOffset = 0, groundY = 0, curRoom = null;
   const keys = Object.create(null);
 
   function loadThree() {
@@ -103,11 +105,12 @@
     attachLook(renderer.domElement);
     makeControls();
 
-    colliders = []; grounds = [];
+    colliders = []; grounds = []; roomsList = data.rooms || []; curRoom = null;
     const cache = {};
+    const trans = (k) => k === "ceiling" || k === "glass";
     const matFor = (c, kind) => {
       const key = c + kind;
-      if (!cache[key]) cache[key] = new THREE.MeshLambertMaterial({ color: c, transparent: kind === "ceiling", opacity: kind === "ceiling" ? 0.35 : 1, side: kind === "ceiling" ? THREE.DoubleSide : THREE.FrontSide });
+      if (!cache[key]) cache[key] = new THREE.MeshLambertMaterial({ color: c, transparent: trans(kind), opacity: kind === "ceiling" ? 0.35 : kind === "glass" ? 0.3 : 1, side: trans(kind) ? THREE.DoubleSide : THREE.FrontSide });
       return cache[key];
     };
     for (const b of data.boxes) {
@@ -118,7 +121,7 @@
         const ry = b.rot ? (-b.rot * Math.PI) / 180 : 0;
         if (ry) mesh.rotation.y = ry;
         scene.add(mesh);
-        if (b.kind !== "ceiling") addEdges(geo, mesh.position, ry);
+        if (b.kind !== "ceiling" && b.kind !== "glass") addEdges(geo, mesh.position, ry);
       }
       if ((b.kind === "wall" || b.kind === "collider") && b.z < 150 && b.z + b.h > 40) colliders.push(b);
       if (b.kind === "floor" || b.kind === "stair") grounds.push(b);
@@ -256,6 +259,15 @@
     camera.position.z = z;
     groundY = groundAt(x, z, groundY); // step-up / drop follow (climb or go under stairs)
     camera.position.y = groundY + EYE + flyOffset;
+
+    if (roomHud) {
+      let name = "";
+      const y = camera.position.y;
+      for (const r of roomsList) {
+        if (x >= r.minx && x <= r.maxx && z >= r.miny && z <= r.maxy && y >= r.z0 - 40 && y <= r.z1 + 120) { name = r.name; break; }
+      }
+      if (name !== curRoom) { curRoom = name; roomHud.textContent = name; roomHud.style.display = name ? "block" : "none"; }
+    }
     renderer.render(scene, camera);
   }
 
@@ -295,6 +307,7 @@
     window.removeEventListener("keydown", keyDown);
     window.removeEventListener("keyup", keyUp);
     for (const k in keys) delete keys[k];
+    if (roomHud) roomHud.style.display = "none";
     overlay.hidden = true;
     if (renderer) { renderer.dispose(); }
     holder.innerHTML = "";
