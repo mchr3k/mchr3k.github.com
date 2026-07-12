@@ -1942,6 +1942,7 @@
       el("electric-kind").value = r.elec.kind;
       el("electric-size").value = r.elec.size;
       el("electric-face").value = r.elec.face;
+      el("electric-elev").value = round(r.elec.elevation != null ? r.elec.elevation : 30);
       el("btn-rotate").disabled = true;
       el("btn-duplicate").disabled = false;
       el("btn-delete").disabled = false;
@@ -1975,6 +1976,16 @@
     rotField.hidden = r.kind !== "object";
     if (r.kind === "object") el("f-rot").value = String(item.rot || 0);
 
+    const isPlainObj = r.kind === "object" && item.type === "object";
+    // 3D heights: wall height for rooms, height + off-ground for plain objects.
+    el("f-roomheight-field").hidden = r.kind !== "room";
+    if (r.kind === "room") el("f-roomheight").value = round(item.height || 300);
+    el("f-objheight-row").hidden = !isPlainObj;
+    if (isPlainObj) {
+      el("f-objheight").value = round(item.objHeight || 50);
+      el("f-objelev").value = round(item.elevation || 0);
+    }
+
     const stairCtl = el("stair-controls");
     stairCtl.hidden = !isStair;
     if (isStair) {
@@ -1982,6 +1993,7 @@
       el("stair-door-left").checked = !!item.doors.left;
       el("stair-door-right").checked = !!item.doors.right;
       el("stair-top-marker").checked = !!findStairTop(item.id);
+      el("stair-ceiling").value = round(item.ceiling || 300);
     }
 
     const walls = el("room-walls");
@@ -2190,6 +2202,9 @@
       }
       grid.append(openingField(o, "frame", "Frame each side (cm)", "number"));
     }
+    // 3D heights: opening height, and sill (height off the ground) for windows.
+    grid.append(openingField(o, "height", "Height (cm)", "number"));
+    if (o.type === "window") grid.append(openingField(o, "sill", "Sill / off ground (cm)", "number"));
     li.append(head, grid);
     return li;
   }
@@ -2272,7 +2287,7 @@
     } else {
       input = document.createElement("input");
       input.type = "number";
-      const allowZero = key === "gap" || key === "frame";
+      const allowZero = key === "gap" || key === "frame" || key === "sill";
       input.min = allowZero ? "0" : "1";
       input.step = "1";
       input.value = round(o[key] || 0);
@@ -2347,6 +2362,18 @@
     numField("f-h", "h", 1);
     numField("f-x", "x", null);
     numField("f-y", "y", null);
+    numField("f-roomheight", "height", 1);   // room wall height (3D)
+    numField("f-objheight", "objHeight", 1);  // object height (3D)
+    numField("f-objelev", "elevation", 0);    // object height off the ground (3D)
+    numField("stair-ceiling", "ceiling", 1);  // ceiling above a staircase (3D)
+    el("electric-elev").addEventListener("input", (e) => {
+      const r = resolveSel();
+      if (!r || r.kind !== "electric") return;
+      const v = parseFloat(e.target.value);
+      if (isNaN(v)) return;
+      r.elec.elevation = Math.max(0, round(v));
+      saveSoon();
+    });
     el("f-rot").addEventListener("change", (e) => {
       const r = resolveSel();
       if (r && r.kind === "object") { r.item.rot = parseInt(e.target.value, 10) || 0; render(); save(); }
@@ -2692,6 +2719,97 @@
     render();
   }
 
+  // ---------------------------------------------------------------------------
+  // 3D scene extraction (consumed by walk3d.js). Everything is emitted as plain
+  // axis-aligned box data in plan cm — cx,cy = plan centre, z = bottom height,
+  // w,d = plan footprint, h = vertical size, rot = degrees about vertical.
+  // ---------------------------------------------------------------------------
+  function box3(cx, cy, z, w, d, h, color, kind, rot) {
+    return { cx, cy, z, w, d, h, color, kind, rot: rot || 0 };
+  }
+
+  function stairBoxes3(out, room, obj) {
+    const rot = obj.rot || 0;
+    const rise = room.height || 300; // one storey up
+    const N = clamp(Math.round(rise / 18), 3, 26);
+    const toWorld = (lx, ly) => {
+      const [rx, ry] = rot ? rotatePoint(lx, ly, obj.w / 2, obj.h / 2, rot) : [lx, ly];
+      return [room.x + obj.x + rx, room.y + obj.y + ry];
+    };
+    for (let i = 0; i < N; i++) {
+      // Treads climb from the bottom end (local y=h) up to the top (y=0).
+      const yc = obj.h - (i + 0.5) * (obj.h / N);
+      const [wx, wy] = toWorld(obj.w / 2, yc);
+      out.push(box3(wx, wy, 0, obj.w, obj.h / N, (i + 1) * (rise / N), "#94a3b8", "stair", rot));
+    }
+  }
+
+  function build3DScene() {
+    const boxes = [];
+    const T = 10; // wall thickness (cm)
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+    for (const room of state.rooms) {
+      const H = room.height || 300;
+      const poly = itemLocalGeometry(room).points.map(([lx, ly]) => [room.x + lx, room.y + ly]);
+      const xs = poly.map((p) => p[0]), ys = poly.map((p) => p[1]);
+      const rminx = Math.min(...xs), rmaxx = Math.max(...xs), rminy = Math.min(...ys), rmaxy = Math.max(...ys);
+      minX = Math.min(minX, rminx); minY = Math.min(minY, rminy); maxX = Math.max(maxX, rmaxx); maxY = Math.max(maxY, rmaxy);
+      // floor + ceiling slabs (AABB — fine for near-rectangular rooms)
+      boxes.push(box3((rminx + rmaxx) / 2, (rminy + rmaxy) / 2, -4, rmaxx - rminx, rmaxy - rminy, 4, room.color, "floor", 0));
+      boxes.push(box3((rminx + rmaxx) / 2, (rminy + rmaxy) / 2, H, rmaxx - rminx, rmaxy - rminy, 4, "#e2e8f0", "ceiling", 0));
+
+      // walls with door / window openings
+      for (const seg of roomSegments(room)) {
+        const [dx, dy] = seg.dir;
+        const horiz = Math.abs(dx) > 0.5;
+        const sxw = room.x + seg.sx, syw = room.y + seg.sy;
+        const holes = [];
+        for (const p of layoutSegment(seg)) {
+          if (!p.type) continue;
+          const a = clamp(p.start, 0, seg.len), b = clamp(p.end, 0, seg.len);
+          if (b - a < 1) continue;
+          const op = p.op;
+          const sill = op.type === "window" ? (op.sill || 0) : 0;
+          holes.push({ a, b, sill, top: sill + (op.height || (op.type === "window" ? 120 : 200)) });
+        }
+        holes.sort((u, v) => u.a - v.a);
+        const wall = (a, b, z0, z1) => {
+          if (b - a < 1 || z1 - z0 < 1) return;
+          const cx = sxw + dx * ((a + b) / 2), cy = syw + dy * ((a + b) / 2), along = b - a;
+          boxes.push(box3(cx, cy, z0, horiz ? along : T, horiz ? T : along, z1 - z0, "#cbd5e1", "wall", 0));
+        };
+        let cursor = 0;
+        for (const h of holes) {
+          wall(cursor, h.a, 0, H);
+          if (h.sill > 0) wall(h.a, h.b, 0, h.sill);      // wall below a window
+          if (h.top < H) wall(h.a, h.b, h.top, H);        // lintel above the opening
+          cursor = Math.max(cursor, h.b);
+        }
+        wall(cursor, seg.len, 0, H);
+      }
+
+      for (const obj of room.objects || []) {
+        const cx = room.x + obj.x + obj.w / 2, cy = room.y + obj.y + obj.h / 2;
+        if (obj.type === "stair") { stairBoxes3(boxes, room, obj); continue; }
+        if (obj.type === "stairtop") { boxes.push(box3(cx, cy, obj.elevation || 0, obj.w, obj.h, 8, "#f59e0b", "stairtop", obj.rot || 0)); continue; }
+        boxes.push(box3(cx, cy, obj.elevation || 0, obj.w, obj.h, obj.objHeight || 50, obj.color, "object", obj.rot || 0));
+      }
+      for (const e of room.electrics || []) {
+        const p = perimeterPoint(room, e.d);
+        if (!p) continue;
+        const n = e.face === "out" ? p.outward : p.inward;
+        const cx = room.x + p.lx + n[0] * 3, cy = room.y + p.ly + n[1] * 3;
+        const W = e.size === "double" ? 15 : 9, horiz = Math.abs(p.dir[0]) > 0.5;
+        boxes.push(box3(cx, cy, e.elevation != null ? e.elevation : 30, horiz ? W : 4, horiz ? 4 : W, 8, e.kind === "switch" ? "#a78bfa" : "#6d28d9", "electric", 0));
+      }
+    }
+    const r0 = state.rooms[0];
+    const spawn = r0 ? { x: r0.x + r0.w / 2, y: r0.y + r0.h / 2 } : { x: 0, y: 0 };
+    return { boxes, bounds: { minX, minY, maxX, maxY }, spawn };
+  }
+  window.__plan3d = { build: build3DScene };
+
   const ZOOM_PRESETS = [25, 50, 75, 100, 150, 200, 400];
   // Reflect the current zoom in the toolbar dropdown (a live "73%" option when
   // it's not on a preset).
@@ -2780,6 +2898,8 @@
       y: +r.y || 0,
       w: Math.max(1, +r.w || 100),
       h: Math.max(1, +r.h || 100),
+      // Wall height (cm) for 3D walk mode; defaults to 3 m.
+      height: Math.max(1, Math.round(+r.height || 300)),
       color: r.color || "#c7d2fe",
       notches: (r.notches || [])
         .filter((n) => ["top", "right", "bottom", "left"].includes(n.side))
@@ -2804,6 +2924,10 @@
           // Door frame width on *each* side: stays marked on the wall as part of
           // the door, but the swinging leaf only spans width - 2*frame.
           frame: Math.max(0, Math.round(+o.frame || 0)),
+          // 3D heights (cm): opening height, and sill = height off the ground
+          // (windows sit up the wall; doors reach the floor).
+          height: Math.max(1, Math.round(+o.height || (o.type === "window" ? 120 : 200))),
+          sill: Math.max(0, Math.round(o.sill != null ? +o.sill : (o.type === "window" ? 90 : 0))),
         })),
       objects: (r.objects || []).map((o) => ({
         id: o.id || uid("o"),
@@ -2821,6 +2945,11 @@
         doors: { top: !!(o.doors && o.doors.top), left: !!(o.doors && o.doors.left), right: !!(o.doors && o.doors.right) },
         // A stairtop marker links back to its staircase.
         stairId: o.stairId ? String(o.stairId) : null,
+        // 3D: object height (cm, default 50) and height off the ground (default 0).
+        // A staircase uses `ceiling` for the headroom above it (default 3 m).
+        objHeight: Math.max(1, Math.round(+o.objHeight || (o.type === "stair" ? Math.max(1, Math.round(+r.height || 300)) : 50))),
+        elevation: Math.max(0, Math.round(+o.elevation || 0)),
+        ceiling: Math.max(1, Math.round(+o.ceiling || Math.max(1, Math.round(+r.height || 300)))),
       })),
       // Wall-mounted electrics (sockets / switches). `d` is the distance in cm
       // along the room outline perimeter; `face` in = into the room, out = the
@@ -2831,6 +2960,8 @@
         size: e.size === "double" ? "double" : "single",
         d: Math.max(0, +e.d || 0),
         face: e.face === "out" ? "out" : "in",
+        // 3D: height off the ground (cm). Switches sit ~1.3 m, sockets ~0.3 m.
+        elevation: Math.max(0, Math.round(e.elevation != null ? +e.elevation : (e.kind === "switch" ? 130 : 30))),
       })),
     };
   }
