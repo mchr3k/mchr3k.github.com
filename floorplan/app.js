@@ -2940,9 +2940,10 @@
   // for windows, or a leaf swung open for doors), so doorways and windows read
   // clearly in 3D. `seg` gives the wall direction/normal for the door swing.
   function openingTrim3(boxes, cxAt, cyAt, horiz, WT, OZ, h, seg) {
-    // Frame sits flush in the (near-zero-thickness) wall so it never pokes
-    // through into the neighbouring room; it reads as a frame by its colour.
-    const fc = "#475569", ft = WT, jamb = 4, hz = 6;
+    // The frame stands slightly proud of the (near-zero-thickness) wall so its
+    // slate faces win the depth test instead of z-fighting the cream wall, while
+    // only poking ~1 cm into the neighbouring room.
+    const fc = "#475569", ft = WT + 2, jamb = 4, hz = 6;
     const mid = (h.a + h.b) / 2;
     const jambBox = (m) => boxes.push(box3(cxAt(m), cyAt(m), OZ + h.sill, horiz ? jamb : ft, horiz ? ft : jamb, h.top - h.sill, fc, "frame", 0));
     jambBox(h.a); jambBox(h.b);
@@ -3129,13 +3130,16 @@
             return OZ;
           };
           // Every banister edge follows the floor level (so a rail on the raised
-          // side sits on it, and one alongside the steps rakes down with them).
+          // side sits on it, and one alongside the steps rakes down with them). It
+          // also drops a fascia from the floor down to the ceiling of the storey
+          // below, boxing in the stairwell edge — on the raised side that's the
+          // extra step-up height (e.g. 45 cm), on the lower side just the slab.
           const N = 24, pts = [];
           for (let i = 0; i <= N; i++) {
             const m = (seg.len * i) / N, coord = split.axis === 0 ? sxw + dx * m : syw + dy * m;
             pts.push([sxw + dx * m, syw + dy * m, floorAt(coord)]);
           }
-          rails.push({ pts, h: segH, color: WALL_COLOR3 });
+          rails.push({ pts, h: segH, bottom: T.z - 2, color: WALL_COLOR3 });
           continue;
         }
         const holes = [];
@@ -3161,6 +3165,20 @@
           const lo = clamp(ca, 0, seg.len), hi = clamp(cb, 0, seg.len);
           if (hi - lo > 1) holes.push({ a: lo, b: hi, sill: 0, top: segH, own: false });
         }
+        // A cut-in flush with a corner also carves the adjacent (perpendicular)
+        // wall back by its depth; without this the adjacent wall's stub renders on
+        // past the recess (e.g. into a neighbouring room). SIDES run top→right→
+        // bottom→left, each starting where the previous ends.
+        if (!seg.notchId) {
+          const order = ["top", "right", "bottom", "left"], si = order.indexOf(seg.side);
+          const nextSide = order[(si + 1) % 4], prevSide = order[(si + 3) % 4];
+          for (const n of room.notches || []) {
+            if (!(n.depth < 0)) continue;
+            const nLen = SIDES[n.side].len(room), d = Math.abs(n.depth);
+            if (n.side === nextSide && n.pos <= 0.5) holes.push({ a: seg.len - d, b: seg.len, sill: 0, top: segH, own: false }); // carves this seg's end
+            if (n.side === prevSide && n.pos + n.width >= nLen - 0.5) holes.push({ a: 0, b: d, sill: 0, top: segH, own: false }); // carves this seg's start
+          }
+        }
         // Also cut where a neighbour room's opening lies on this same wall line,
         // shifting for any height difference between the two rooms' floors.
         for (const o of floorOps) {
@@ -3183,8 +3201,10 @@
         let cursor = 0;
         for (const h of holes) {
           wall(cursor, h.a, 0, segH);
-          if (h.sill > 0) wall(h.a, h.b, 0, Math.min(h.sill, segH));
-          if (h.top < segH) wall(h.a, h.b, h.top, segH);
+          // Sill / lintel overlap the side walls by WT so their end faces are
+          // buried (no coincident-face z-fighting at the jambs).
+          if (h.sill > 0) wall(h.a - WT, h.b + WT, 0, Math.min(h.sill, segH));
+          if (h.top < segH) wall(h.a - WT, h.b + WT, h.top, segH);
           cursor = Math.max(cursor, h.b);
           if (h.own) openingTrim3(boxes, cxAt, cyAt, horiz, WT, OZ, h, seg); // frame + glass/leaf
         }
@@ -3268,11 +3288,8 @@
           const stx = room.x + obj.x + rx + T.tx, sty = room.y + obj.y + ry + T.ty; // stair top in 3D
           tf[tci] = { tx: stx - mx, ty: sty - my, z: T.z + fh };
           queue.push(tci);
-          // The "Stairs up" marker footprint is the landing where the stair joins
-          // the floor above: fill it with floor (matching that floor) so the stair
-          // top meets the upper hall with no gap. The marker itself draws nothing.
-          const lw = (top.obj.rot % 180) ? top.obj.h : top.obj.w, ld = (top.obj.rot % 180) ? top.obj.w : top.obj.h;
-          boxes.push(box3(stx, sty, tf[tci].z - 4, lw, ld, 4, target.color, "floor", 0));
+          // (No landing slab — the stair is expected to meet the floor above at
+          // its edge. The "Stairs up" marker only locates the join and draws nothing.)
           // If the floor above has a banister cut-in, that void is the stairwell
           // opening (handled below); otherwise punch a small opening at the "Stairs
           // up" marker's footprint through the floor above / ceiling below, and open
