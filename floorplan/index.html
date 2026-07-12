@@ -38,6 +38,7 @@
         <button id="btn-add-stair" title="Add a staircase to the selected room">+ Stair</button>
         <button id="btn-add-electric" title="Add a socket / switch to the selected room's wall">+ Electric</button>
         <button id="btn-laser" title="Laser measure: cross-check a real laser reading">📏 Laser measure</button>
+        <button id="btn-walk3d" title="Walk around the plan in 3D">🧊 3D walk</button>
       </div>
 
       <div class="toolbar-group">
@@ -183,6 +184,10 @@
               <option value="out">External wall face</option>
             </select>
           </label>
+          <label class="field">
+            <span>Off ground (cm)</span>
+            <input type="number" id="electric-elev" min="0" step="1" />
+          </label>
         </div>
 
         <div id="panel-details" class="panel-section" hidden>
@@ -233,13 +238,33 @@
             <input type="color" id="f-color" />
           </label>
 
+          <label class="field" id="f-roomheight-field" hidden>
+            <span>Wall height (cm)</span>
+            <input type="number" id="f-roomheight" min="1" step="1" />
+          </label>
+
+          <div class="field-row" id="f-objheight-row" hidden>
+            <label class="field">
+              <span>Height (cm)</span>
+              <input type="number" id="f-objheight" min="1" step="1" />
+            </label>
+            <label class="field">
+              <span>Off ground (cm)</span>
+              <input type="number" id="f-objelev" min="0" step="1" />
+            </label>
+          </div>
+
           <div id="stair-controls" hidden>
+            <label class="field">
+              <span>Ceiling above stair (cm)</span>
+              <input type="number" id="stair-ceiling" min="1" step="1" />
+            </label>
             <h3>Staircase</h3>
             <p class="muted small">The arrow points from the bottom up to the top. Doors can sit on any side except the bottom.</p>
             <label class="check"><input type="checkbox" id="stair-door-top" autocomplete="off" /> Door on top</label>
             <label class="check"><input type="checkbox" id="stair-door-left" autocomplete="off" /> Door on left</label>
             <label class="check"><input type="checkbox" id="stair-door-right" autocomplete="off" /> Door on right</label>
-            <label class="check"><input type="checkbox" id="stair-top-marker" autocomplete="off" /> Show a “top” marker (connects up to another floor)</label>
+            <label class="check"><input type="checkbox" id="stair-top-marker" autocomplete="off" /> Show a “top” marker (place it by the floor this stair climbs to)</label>
           </div>
 
           <div id="room-walls" class="room-walls" hidden>
@@ -372,10 +397,21 @@
     </div>
 
 
+    <!-- 3D walk mode: full-screen overlay (three.js is loaded on demand). -->
+    <div id="walk3d" class="walk3d" hidden>
+      <div id="walk3d-canvas" class="walk3d-canvas"></div>
+      <div class="walk3d-bar">
+        <span id="walk3d-status" class="walk3d-status"></span>
+        <span class="walk3d-help">Click to look · <b>W A S D</b> move · <b>Space</b>/<b>Shift</b> up-down · <b>Esc</b> release</span>
+        <button id="walk3d-exit" type="button">✕ Exit 3D</button>
+      </div>
+    </div>
+
     <!-- Google Identity Services (for Drive OAuth). Loads only when online. -->
     <script src="https://accounts.google.com/gsi/client" async></script>
     <!-- Google API client, used to load the Picker for opening shared plans. -->
     <script src="https://apis.google.com/js/api.js" async></script>
     <script src="app.js"></script>
+    <script src="walk3d.js"></script>
   </body>
 </html>
