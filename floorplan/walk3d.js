@@ -1,7 +1,8 @@
 // First-person "walk around the plan" 3D mode. Reads the plan as plain box data
 // from app.js (window.__plan3d.build) and renders it with three.js (loaded on
 // demand). Kept fully separate from the 2D app; if three.js can't load the 2D
-// app is unaffected.
+// app is unaffected. Controls work on both desktop (drag + WASD) and touch
+// (drag to look + an on-screen movement pad) — iOS has no pointer lock.
 (function () {
   "use strict";
   const btn = document.getElementById("btn-walk3d");
@@ -16,6 +17,7 @@
   const SPEED = 320;    // walk speed (cm/s)
   const FLY = 260;      // vertical fly speed (cm/s)
   const STEP_UP = 40;   // most you can step up in one go (climb stairs; stay under them)
+  const PITCH_LIM = Math.PI / 2 - 0.05;
 
   let THREE = null, renderer = null, scene = null, camera = null;
   let raf = 0, active = false, last = 0;
@@ -43,10 +45,9 @@
     return Math.abs(dx) <= b.w / 2 && Math.abs(dz) <= b.d / 2;
   }
 
-  // Walkable surface under (x,z): the highest floor / stair top you can reach —
-  // i.e. no more than STEP_UP above your feet (so you climb stairs one step at a
-  // time, and stay on the floor under the stairs instead of being lifted onto
-  // them). You can always drop to a lower surface (the floor is at 0).
+  // Walkable surface under (x,z): the highest floor / stair top no more than
+  // STEP_UP above your feet (climb stairs a step at a time; stay on the floor
+  // under them). You can always drop to a lower surface (the floor is at 0).
   function groundAt(x, z, feetY) {
     let g = 0;
     for (const b of grounds) {
@@ -76,37 +77,48 @@
     return [x, z];
   }
 
+  let edgeMat = null;
+  function addEdges(geo, position, rotationY) {
+    const e = new THREE.LineSegments(new THREE.EdgesGeometry(geo), edgeMat);
+    if (position) e.position.copy(position);
+    if (rotationY) e.rotation.y = rotationY;
+    scene.add(e);
+  }
+
   function build() {
     const data = window.__plan3d.build();
     scene = new THREE.Scene();
-    scene.background = new THREE.Color("#0b1220");
-    scene.fog = new THREE.Fog("#0b1220", 800, 6000);
-    scene.add(new THREE.HemisphereLight("#ffffff", "#1e293b", 1.15));
-    const dl = new THREE.DirectionalLight("#ffffff", 0.55);
-    dl.position.set(0.4, 1, 0.6);
-    scene.add(dl);
+    scene.background = new THREE.Color("#dbe4f0");
+    scene.add(new THREE.HemisphereLight("#ffffff", "#8794a8", 1.0));
+    const dl = new THREE.DirectionalLight("#ffffff", 0.85); dl.position.set(0.5, 1, 0.25); scene.add(dl);
+    const dl2 = new THREE.DirectionalLight("#c7d2fe", 0.45); dl2.position.set(-0.4, 0.5, -0.6); scene.add(dl2);
+    edgeMat = new THREE.LineBasicMaterial({ color: "#1e293b", transparent: true, opacity: 0.55 });
 
     const W = holder.clientWidth || window.innerWidth, H = holder.clientHeight || window.innerHeight;
-    camera = new THREE.PerspectiveCamera(72, W / H, 4, 30000);
+    camera = new THREE.PerspectiveCamera(75, W / H, 4, 30000);
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(W, H);
     holder.appendChild(renderer.domElement);
-    renderer.domElement.addEventListener("click", () => renderer.domElement.requestPointerLock());
+    attachLook(renderer.domElement);
+    makeControls();
 
     colliders = []; grounds = [];
     const cache = {};
     const matFor = (c, kind) => {
       const key = c + kind;
-      if (!cache[key]) cache[key] = new THREE.MeshLambertMaterial({ color: c, transparent: kind === "ceiling", opacity: kind === "ceiling" ? 0.5 : 1 });
+      if (!cache[key]) cache[key] = new THREE.MeshLambertMaterial({ color: c, transparent: kind === "ceiling", opacity: kind === "ceiling" ? 0.35 : 1, side: kind === "ceiling" ? THREE.DoubleSide : THREE.FrontSide });
       return cache[key];
     };
     for (const b of data.boxes) {
       if (b.kind !== "collider") { // "collider" boxes block but aren't drawn
-        const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.w, b.h, b.d), matFor(b.color, b.kind));
+        const geo = new THREE.BoxGeometry(b.w, b.h, b.d);
+        const mesh = new THREE.Mesh(geo, matFor(b.color, b.kind));
         mesh.position.set(b.cx, b.z + b.h / 2, b.cy);
-        if (b.rot) mesh.rotation.y = (-b.rot * Math.PI) / 180;
+        const ry = b.rot ? (-b.rot * Math.PI) / 180 : 0;
+        if (ry) mesh.rotation.y = ry;
         scene.add(mesh);
+        if (b.kind !== "ceiling") addEdges(geo, mesh.position, ry);
       }
       if ((b.kind === "wall" || b.kind === "collider") && b.z < 150 && b.z + b.h > 40) colliders.push(b);
       if (b.kind === "floor" || b.kind === "stair") grounds.push(b);
@@ -115,7 +127,7 @@
 
     groundY = groundAt(data.spawn.x, data.spawn.y, 0);
     camera.position.set(data.spawn.x, groundY + EYE, data.spawn.y);
-    yaw = 0; pitch = 0; flyOffset = 0;
+    yaw = 0; pitch = -0.12; flyOffset = 0; // start looking very slightly down into the room
     onResize();
   }
 
@@ -162,6 +174,50 @@
     p.needsUpdate = true;
     geo.computeVertexNormals();
     scene.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: s.color, side: THREE.DoubleSide })));
+    scene.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), edgeMat)); // outline the door shape
+  }
+
+  // ----- Look (drag) — works for both touch and mouse; no pointer lock -----
+  function attachLook(el) {
+    let drag = null;
+    el.style.touchAction = "none";
+    el.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, y: e.clientY, id: e.pointerId }; try { el.setPointerCapture(e.pointerId); } catch (_) {} });
+    el.addEventListener("pointermove", (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      yaw -= (e.clientX - drag.x) * 0.004;
+      pitch -= (e.clientY - drag.y) * 0.004;
+      pitch = Math.max(-PITCH_LIM, Math.min(PITCH_LIM, pitch));
+      drag.x = e.clientX; drag.y = e.clientY;
+    });
+    const end = (e) => { if (drag && e.pointerId === drag.id) drag = null; };
+    el.addEventListener("pointerup", end);
+    el.addEventListener("pointercancel", end);
+  }
+
+  // ----- On-screen movement pad (touch) -----
+  function makeControls() {
+    const mk = (label, code, cls) => {
+      const b = document.createElement("button");
+      b.className = "walk3d-key " + (cls || "");
+      b.textContent = label;
+      const set = (v) => (e) => { e.preventDefault(); e.stopPropagation(); keys[code] = v; };
+      b.addEventListener("pointerdown", set(true));
+      b.addEventListener("pointerup", set(false));
+      b.addEventListener("pointerleave", set(false));
+      b.addEventListener("pointercancel", set(false));
+      return b;
+    };
+    const pad = document.createElement("div");
+    pad.className = "walk3d-pad";
+    pad.append(
+      mk("▲", "keyw", "up"), mk("◀", "keya", "left"),
+      mk("▶", "keyd", "right"), mk("▼", "keys", "down")
+    );
+    holder.appendChild(pad);
+    const vpad = document.createElement("div");
+    vpad.className = "walk3d-vpad";
+    vpad.append(mk("⤒", "space"), mk("⤓", "shiftleft"));
+    holder.appendChild(vpad);
   }
 
   function onResize() {
@@ -211,13 +267,6 @@
       keys[c] = down;
     };
   }
-  function onMouse(e) {
-    if (!active || document.pointerLockElement !== renderer.domElement) return;
-    yaw -= e.movementX * 0.0022;
-    pitch -= e.movementY * 0.0022;
-    const lim = Math.PI / 2 - 0.05;
-    pitch = Math.max(-lim, Math.min(lim, pitch));
-  }
 
   async function open() {
     overlay.hidden = false;
@@ -232,22 +281,19 @@
     build();
     active = true;
     last = 0;
-    statusEl.textContent = "Click the view to look around";
+    statusEl.textContent = "Drag to look";
     window.addEventListener("resize", onResize);
     window.addEventListener("keydown", keyDown, { passive: false });
     window.addEventListener("keyup", keyUp);
-    window.addEventListener("mousemove", onMouse);
     raf = requestAnimationFrame(frame);
   }
 
   function close() {
     active = false;
     cancelAnimationFrame(raf);
-    if (document.pointerLockElement) document.exitPointerLock();
     window.removeEventListener("resize", onResize);
     window.removeEventListener("keydown", keyDown);
     window.removeEventListener("keyup", keyUp);
-    window.removeEventListener("mousemove", onMouse);
     for (const k in keys) delete keys[k];
     overlay.hidden = true;
     if (renderer) { renderer.dispose(); }
@@ -258,5 +304,5 @@
   const keyDown = onKey(true), keyUp = onKey(false);
   btn.addEventListener("click", open);
   exitBtn.addEventListener("click", close);
-  window.addEventListener("keydown", (e) => { if (active && e.code === "Escape" && !document.pointerLockElement) close(); });
+  window.addEventListener("keydown", (e) => { if (active && e.code === "Escape") close(); });
 })();
