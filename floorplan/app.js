@@ -2141,6 +2141,20 @@
       notchField(n, "depth", "Depth (cm)", "number")
     );
 
+    // A cut-in can be a banister: full-height outer walls, but its own edges are
+    // a low rail (and it becomes the stairwell opening for a stair arriving here).
+    if (n.depth < 0) {
+      const bRow = document.createElement("label");
+      bRow.className = "check";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = !!n.banister;
+      cb.addEventListener("change", (e) => { n.banister = e.target.checked; save(); render(); refreshPanel(); });
+      bRow.append(cb, document.createTextNode(" Banister (open railing)"));
+      grid.appendChild(bRow);
+      if (n.banister) grid.append(notchField(n, "banisterHeight", "Banister height (cm)", "number"));
+    }
+
     // Nested cut in / cut out, placed along this notch's face.
     const nest = document.createElement("div");
     nest.className = "wall-buttons nested";
@@ -2960,37 +2974,93 @@
     return holes;
   }
 
+  // Clip a polygon to the half-plane { p : sign*(p[axis]-coord) >= 0 } (axis 0=x,
+  // 1=y). Used to split a room's floor into two levels at a within-room stair.
+  function clipHalfplane(poly, axis, coord, sign) {
+    const out = [];
+    const inside = (p) => sign * (p[axis] - coord) >= -1e-6;
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length];
+      const ai = inside(a), bi = inside(b);
+      if (ai) out.push(a);
+      if (ai !== bi && Math.abs(b[axis] - a[axis]) > 1e-9) {
+        const t = (coord - a[axis]) / (b[axis] - a[axis]);
+        out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+      }
+    }
+    return out;
+  }
+
+  // Full-height gaps where a stairwell `well` crosses this axis-aligned wall
+  // segment, so the wall the stairs arrive at is opened through to the room.
+  function wellWallGaps(wells, rOZ, sxw, syw, dx, dy, horiz, len, top) {
+    const gaps = [];
+    for (const w of wells || []) {
+      if (Math.abs(w.z - rOZ) > 3) continue;
+      const cross = horiz ? syw : sxw;
+      const clo = horiz ? w.miny : w.minx, chi = horiz ? w.maxy : w.maxx;
+      if (cross < clo - 1 || cross > chi + 1) continue; // wall line not in the well band
+      const wa = horiz ? w.minx : w.miny, wb = horiz ? w.maxx : w.maxy;
+      const d = horiz ? dx : dy, s = horiz ? sxw : syw;
+      const p1 = (wa - s) * d, p2 = (wb - s) * d;
+      const lo = Math.max(0, Math.min(p1, p2)), hi = Math.min(len, Math.max(p1, p2));
+      if (hi - lo > 1) gaps.push({ a: lo, b: hi, sill: 0, top, own: false });
+    }
+    return gaps;
+  }
+
   // Emit one floor's geometry, translated by T = {tx,ty,z}. `polys` collects the
   // flat floor/ceiling polygons (drawn to the room's true outline, with stairwell
   // holes from `wells`); `wells` are world-space openings between stacked floors.
-  function buildFloorBoxes3(rooms, T, boxes, polys, stairs, roomsOut, bounds, wells) {
-    const WT = 10, OX = T.tx, OY = T.ty, OZ = T.z;
-    const fh = floorRoomsHeight(rooms);
+  // `elev` raises a whole room (split-level), `splits` splits one room's floor at
+  // a within-room stair.
+  function buildFloorBoxes3(rooms, T, boxes, polys, stairs, roomsOut, bounds, wells, elev, splits) {
+    const WT = 1, OX = T.tx, OY = T.ty; // walls are ~zero thickness
     const floorOps = floorOpenings3(rooms, OX, OY);
     for (const room of rooms) {
       const H = room.height || 300;
+      const OZ = T.z + ((elev && elev[room.id]) || 0);
+      const WH = H - 2; // wall top: just below the ceiling, so it never reaches the floor above
       const poly = itemLocalGeometry(room).points.map(([lx, ly]) => [room.x + lx + OX, room.y + ly + OY]);
       const xs = poly.map((p) => p[0]), ys = poly.map((p) => p[1]);
       const rminx = Math.min(...xs), rmaxx = Math.max(...xs), rminy = Math.min(...ys), rmaxy = Math.max(...ys);
       bounds.minX = Math.min(bounds.minX, rminx); bounds.minY = Math.min(bounds.minY, rminy);
       bounds.maxX = Math.max(bounds.maxX, rmaxx); bounds.maxY = Math.max(bounds.maxY, rmaxy);
       roomsOut.push({ name: room.name, minx: rminx, maxx: rmaxx, miny: rminy, maxy: rmaxy, z0: OZ, z1: OZ + H });
-      // Floor & ceiling follow the room's real outline (not its bounding box) so
-      // cut-in / cut-out rooms don't overlap and z-fight a neighbour. A stairwell
-      // is punched through both. The ceiling sits 2 cm below the storey top so it
-      // never coincides with the floor of the room stacked above it.
-      polys.push({ points: poly, z: OZ, color: room.color, kind: "floor", holes: wellHoles(wells, OZ, rminx, rmaxx, rminy, rmaxy) });
+      // Ceiling follows the room's real outline (not its bounding box) so cut-in /
+      // cut-out rooms don't overlap a neighbour. A stairwell is punched through. It
+      // sits 2 cm below the storey top so it never coincides with the floor above.
       polys.push({ points: poly, z: OZ + H - 2, color: CEIL_COLOR3, kind: "ceiling", holes: wellHoles(wells, OZ + H, rminx, rmaxx, rminy, rmaxy) });
-      // Invisible bounding-box slab so the walk engine has a walkable surface.
-      boxes.push(box3((rminx + rmaxx) / 2, (rminy + rmaxy) / 2, OZ - 4, rmaxx - rminx, rmaxy - rminy, 4, room.color, "ground", 0));
-      // Corner posts at every outline vertex fill the little square gaps left where
-      // two perpendicular wall boxes meet at a cut-in / cut-out corner.
-      for (const [px, py] of poly) boxes.push(box3(px, py, OZ, WT + 2, WT + 2, H, WALL_COLOR3, "wall", 0));
+
+      // Floor: usually one polygon, but a within-room stair splits it into a lower
+      // near half and a raised far half (a step up), joined by a riser.
+      const split = splits && splits[room.id];
+      const groundBox = (pz, minx, maxx, miny, maxy) => boxes.push(box3((minx + maxx) / 2, (miny + maxy) / 2, pz - 4, maxx - minx, maxy - miny, 4, room.color, "ground", 0));
+      if (split) {
+        const near = clipHalfplane(poly, split.axis, split.coord, -split.sign);
+        const far = clipHalfplane(poly, split.axis, split.coord, split.sign);
+        if (near.length >= 3) polys.push({ points: near, z: OZ, color: room.color, kind: "floor", holes: wellHoles(wells, OZ, rminx, rmaxx, rminy, rmaxy) });
+        if (far.length >= 3) polys.push({ points: far, z: OZ + split.rise, color: room.color, kind: "floor", holes: [] });
+        groundBox(OZ, rminx, rmaxx, rminy, rmaxy);
+        // Raised walkable platform over the far half.
+        if (split.axis === 0) groundBox(OZ + split.rise, split.sign > 0 ? split.coord : rminx, split.sign > 0 ? rmaxx : split.coord, rminy, rmaxy);
+        else groundBox(OZ + split.rise, rminx, rmaxx, split.sign > 0 ? split.coord : rminy, split.sign > 0 ? rmaxy : split.coord);
+        // Riser face across the room at the step line.
+        if (split.axis === 0) boxes.push(box3(split.coord, (rminy + rmaxy) / 2, OZ, WT, rmaxy - rminy, split.rise, WALL_COLOR3, "wall", 0));
+        else boxes.push(box3((rminx + rmaxx) / 2, split.coord, OZ, rmaxx - rminx, WT, split.rise, WALL_COLOR3, "wall", 0));
+      } else {
+        polys.push({ points: poly, z: OZ, color: room.color, kind: "floor", holes: wellHoles(wells, OZ, rminx, rmaxx, rminy, rmaxy) });
+        groundBox(OZ, rminx, rmaxx, rminy, rmaxy);
+      }
 
       for (const seg of roomSegments(room)) {
         const [dx, dy] = seg.dir;
         const horiz = Math.abs(dx) > 0.5;
         const sxw = room.x + seg.sx + OX, syw = room.y + seg.sy + OY;
+        // A cut-in / cut-out marked as a banister renders its own edges as a low
+        // rail; the room's outer-boundary walls stay full height.
+        const nb = seg.notchId ? (room.notches || []).find((n) => n.id === seg.notchId) : null;
+        const segH = nb && nb.banister ? clamp(nb.banisterHeight || 100, 1, WH) : WH;
         const holes = [];
         for (const p of layoutSegment(seg)) {
           if (!p.type) continue;
@@ -3008,7 +3078,7 @@
         // or recess, so a solid base wall here would wall it off from the room.
         for (const [ca, cb] of seg.cutouts || []) {
           const lo = clamp(ca, 0, seg.len), hi = clamp(cb, 0, seg.len);
-          if (hi - lo > 1) holes.push({ a: lo, b: hi, sill: 0, top: H, own: false });
+          if (hi - lo > 1) holes.push({ a: lo, b: hi, sill: 0, top: segH, own: false });
         }
         // Also cut where a neighbour room's opening lies on this same wall line.
         for (const o of floorOps) {
@@ -3018,6 +3088,9 @@
           const lo = Math.max(0, Math.min(pa, pb)), hi = Math.min(seg.len, Math.max(pa, pb));
           if (hi - lo > 1) holes.push({ a: lo, b: hi, sill: o.sill, top: o.top, own: false });
         }
+        // Open the wall full height where a stairwell arrives, so you can see /
+        // walk through into the room the stairs point at.
+        for (const g of wellWallGaps(wells, OZ, sxw, syw, dx, dy, horiz, seg.len, segH)) holes.push(g);
         holes.sort((u, v) => u.a - v.a);
         const cxAt = (m) => sxw + dx * m, cyAt = (m) => syw + dy * m;
         const wall = (a, b, z0, z1) => {
@@ -3026,13 +3099,13 @@
         };
         let cursor = 0;
         for (const h of holes) {
-          wall(cursor, h.a, 0, H);
-          if (h.sill > 0) wall(h.a, h.b, 0, h.sill);
-          if (h.top < H) wall(h.a, h.b, h.top, H);
+          wall(cursor, h.a, 0, segH);
+          if (h.sill > 0) wall(h.a, h.b, 0, Math.min(h.sill, segH));
+          if (h.top < segH) wall(h.a, h.b, h.top, segH);
           cursor = Math.max(cursor, h.b);
           if (h.own) openingTrim3(boxes, cxAt, cyAt, horiz, WT, OZ, h, seg); // frame + glass/leaf
         }
-        wall(cursor, seg.len, 0, H);
+        wall(cursor, seg.len, 0, segH);
       }
 
       for (const obj of room.objects || []) {
@@ -3040,7 +3113,7 @@
         if (obj.type === "stair") {
           // A stair with a top marker climbs a full storey (to the floor above);
           // without one it's a local ramp of its own height.
-          const rise = findStairTop(obj.id) ? fh : (obj.objHeight || H);
+          const rise = findStairTop(obj.id) ? floorRoomsHeight(rooms) : (obj.objHeight || H);
           stairBoxes3(boxes, stairs, room, obj, OX, OY, OZ, rise);
           continue;
         }
@@ -3100,25 +3173,44 @@
           const stx = room.x + obj.x + rx + T.tx, sty = room.y + obj.y + ry + T.ty; // stair top in 3D
           tf[tci] = { tx: stx - mx, ty: sty - my, z: T.z + fh };
           queue.push(tci);
-          // A stairwell opening at the storey boundary so you can see between the
-          // floors: the stair's footprint (final world) plus the marker's, which
-          // maps onto the stair top. Cut through the ceiling below and floor above.
-          const sc = [[0, 0], [obj.w, 0], [obj.w, obj.h], [0, obj.h]].map(([lx, ly]) => {
-            const [px, py] = rot ? rotatePoint(lx, ly, obj.w / 2, obj.h / 2, rot) : [lx, ly];
-            return [room.x + obj.x + px + T.tx, room.y + obj.y + py + T.ty];
-          });
+          // The stairwell opening is just the "Stairs up" marker's footprint (it
+          // maps onto the stair top): the stairs punch through the floor above and
+          // the ceiling below only there — up into the banister cut-in — not along
+          // the whole run. buildFloorBoxes3 also opens the wall it arrives at.
           const mr = top.obj.rot || 0, mhx = (mr % 180) ? top.obj.h / 2 : top.obj.w / 2, mhy = (mr % 180) ? top.obj.w / 2 : top.obj.h / 2;
-          wells.push({
-            minx: Math.min(stx - mhx, ...sc.map((c) => c[0])), maxx: Math.max(stx + mhx, ...sc.map((c) => c[0])),
-            miny: Math.min(sty - mhy, ...sc.map((c) => c[1])), maxy: Math.max(sty + mhy, ...sc.map((c) => c[1])),
-            z: tf[tci].z,
-          });
+          wells.push({ minx: stx - mhx, maxx: stx + mhx, miny: sty - mhy, maxy: sty + mhy, z: tf[tci].z });
         }
       }
     }
     // Any cluster not linked by a stair stays at its own spot on the ground.
     comps.forEach((c, ci) => { if (!tf[ci]) tf[ci] = { tx: 0, ty: 0, z: 0 }; });
-    comps.forEach((c, ci) => buildFloorBoxes3(c, tf[ci], boxes, polys, stairs, rooms3, bounds, wells));
+
+    // Split-level: a within-room stair (no top marker) steps up the floor beyond
+    // its top edge, and raises every other room in the cluster that sits on that
+    // far side. `splits` drives the host room's floor split; `elev` the rest.
+    const elev = {}, splits = {};
+    comps.forEach((c, ci) => {
+      const T = tf[ci];
+      for (const room of c) {
+        for (const obj of room.objects || []) {
+          if (obj.type !== "stair" || findStairTop(obj.id)) continue;
+          const rise = obj.objHeight || (room.height || 300);
+          const rot = obj.rot || 0;
+          const [tx, ty] = rot ? rotatePoint(obj.w / 2, 0, obj.w / 2, obj.h / 2, rot) : [obj.w / 2, 0];
+          const [ax, ay] = rot ? rotatePoint(0, -1, 0, 0, rot) : [0, -1]; // "up the stairs" direction
+          const axis = Math.abs(ax) > Math.abs(ay) ? 0 : 1;
+          const sign = (axis === 0 ? ax : ay) >= 0 ? 1 : -1;
+          const coord = axis === 0 ? room.x + obj.x + tx + T.tx : room.y + obj.y + ty + T.ty;
+          splits[room.id] = { axis, coord, sign, rise };
+          for (const rb of c) {
+            if (rb.id === room.id) continue;
+            const v = axis === 0 ? rb.x + rb.w / 2 + T.tx : rb.y + rb.h / 2 + T.ty;
+            if (sign * (v - coord) > 0) elev[rb.id] = (elev[rb.id] || 0) + rise;
+          }
+        }
+      }
+    });
+    comps.forEach((c, ci) => buildFloorBoxes3(c, tf[ci], boxes, polys, stairs, rooms3, bounds, wells, elev, splits));
 
     const r0 = rooms[0];
     return { boxes, polys, stairs, rooms: rooms3, bounds, spawn: { x: r0.x + r0.w / 2, y: r0.y + r0.h / 2 } };
@@ -3213,6 +3305,10 @@
       pos: Math.max(0, +n.pos || 0),
       width: Math.max(1, +n.width || 50),
       depth: +n.depth || -40,
+      // A banister cut-in keeps full-height outer walls but renders its own edges
+      // as a low rail of `banisterHeight` cm (a stairwell opening in 3D).
+      banister: !!n.banister,
+      banisterHeight: Math.max(1, Math.round(+n.banisterHeight || 100)),
       children: (n.children || []).map((c) => normalizeNotch(c, false)),
     };
     if (isTop) out.side = ["top", "right", "bottom", "left"].includes(n.side) ? n.side : "top";
