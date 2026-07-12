@@ -3131,14 +3131,15 @@
           };
           // Every banister edge follows the floor level (so a rail on the raised
           // side sits on it, and one alongside the steps rakes down with them). It
-          // also drops a fascia below the floor so the stairwell edge is boxed in
-          // (visible from the storey below rather than an open floor edge).
-          const fascia = 25, N = 24, pts = [];
+          // also drops a fascia from the floor down to the ceiling of the storey
+          // below, boxing in the stairwell edge — on the raised side that's the
+          // extra step-up height (e.g. 45 cm), on the lower side just the slab.
+          const N = 24, pts = [];
           for (let i = 0; i <= N; i++) {
             const m = (seg.len * i) / N, coord = split.axis === 0 ? sxw + dx * m : syw + dy * m;
-            pts.push([sxw + dx * m, syw + dy * m, floorAt(coord) - fascia]);
+            pts.push([sxw + dx * m, syw + dy * m, floorAt(coord)]);
           }
-          rails.push({ pts, h: segH + fascia, color: WALL_COLOR3 });
+          rails.push({ pts, h: segH, bottom: T.z - 2, color: WALL_COLOR3 });
           continue;
         }
         const holes = [];
@@ -3163,6 +3164,20 @@
           if (cn && cn.depth < 0 && cn.banister) continue;
           const lo = clamp(ca, 0, seg.len), hi = clamp(cb, 0, seg.len);
           if (hi - lo > 1) holes.push({ a: lo, b: hi, sill: 0, top: segH, own: false });
+        }
+        // A cut-in flush with a corner also carves the adjacent (perpendicular)
+        // wall back by its depth; without this the adjacent wall's stub renders on
+        // past the recess (e.g. into a neighbouring room). SIDES run top→right→
+        // bottom→left, each starting where the previous ends.
+        if (!seg.notchId) {
+          const order = ["top", "right", "bottom", "left"], si = order.indexOf(seg.side);
+          const nextSide = order[(si + 1) % 4], prevSide = order[(si + 3) % 4];
+          for (const n of room.notches || []) {
+            if (!(n.depth < 0)) continue;
+            const nLen = SIDES[n.side].len(room), d = Math.abs(n.depth);
+            if (n.side === nextSide && n.pos <= 0.5) holes.push({ a: seg.len - d, b: seg.len, sill: 0, top: segH, own: false }); // carves this seg's end
+            if (n.side === prevSide && n.pos + n.width >= nLen - 0.5) holes.push({ a: 0, b: d, sill: 0, top: segH, own: false }); // carves this seg's start
+          }
         }
         // Also cut where a neighbour room's opening lies on this same wall line,
         // shifting for any height difference between the two rooms' floors.

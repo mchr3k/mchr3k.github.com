@@ -251,13 +251,15 @@
   }
 
   // A banister rail whose foot follows a raking floor (alongside split-level
-  // steps): a vertical strip from each floor point up by `h`. pts = [x, planY, z].
+  // steps): a vertical strip from a bottom (the floor point, or a flat `bottom`
+  // fascia line) up to the floor point + `h`. pts = [x, planY, floorZ].
   function buildRail(r) {
     if (!r.pts || r.pts.length < 2) return;
     const pos = [];
     for (let i = 0; i < r.pts.length - 1; i++) {
       const [ax, ay, az] = r.pts[i], [bx, by, bz] = r.pts[i + 1];
-      const a0 = [ax, az, ay], b0 = [bx, bz, by], a1 = [ax, az + r.h, ay], b1 = [bx, bz + r.h, by];
+      const abot = r.bottom != null ? r.bottom : az, bbot = r.bottom != null ? r.bottom : bz;
+      const a0 = [ax, abot, ay], b0 = [bx, bbot, by], a1 = [ax, az + r.h, ay], b1 = [bx, bz + r.h, by];
       pos.push(...a0, ...b0, ...b1, ...a0, ...b1, ...a1);
     }
     const g = new THREE.BufferGeometry();
