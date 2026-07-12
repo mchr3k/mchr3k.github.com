@@ -2744,6 +2744,20 @@
       const z0 = i * (rise / N), z1 = (i + 1) * (rise / N);
       out.push(box3(wx, wy, zBase + z0, obj.w, obj.h / N, z1 - z0, "#94a3b8", "stair", rot));
     }
+    // Enclose the understair void on each long side that has no door, following
+    // the sloping underside (a stepped triangle). The void is then reachable
+    // only through a side door, whose opening tapers with the stairs (triangular).
+    const doors = obj.doors || {};
+    for (const side of ["left", "right"]) {
+      if (doors[side]) continue;
+      const xL = side === "left" ? 0 : obj.w;
+      for (let i = 1; i < N; i++) {
+        const yc = obj.h - (i + 0.5) * (obj.h / N);
+        const under = i * (rise / N); // underside height at this band
+        const [wx, wy] = toWorld(xL, yc);
+        out.push(box3(wx, wy, zBase, 8, obj.h / N, under, "#cbd5e1", "wall", rot));
+      }
+    }
     // A small landing at the very top so there's somewhere to stand.
     const [lx, ly] = toWorld(obj.w / 2, obj.h * 0.05);
     out.push(box3(lx, ly, zBase + rise, obj.w, Math.max(20, obj.h * 0.14), 4, "#cbd5e1", "floor", rot));

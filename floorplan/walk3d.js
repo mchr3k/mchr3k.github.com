@@ -15,11 +15,12 @@
   const RADIUS = 18;    // body radius for wall collision (cm)
   const SPEED = 320;    // walk speed (cm/s)
   const FLY = 260;      // vertical fly speed (cm/s)
+  const STEP_UP = 40;   // most you can step up in one go (climb stairs; stay under them)
 
   let THREE = null, renderer = null, scene = null, camera = null;
   let raf = 0, active = false, last = 0;
   let colliders = [], grounds = [];
-  let yaw = 0, pitch = 0, flyOffset = 0;
+  let yaw = 0, pitch = 0, flyOffset = 0, groundY = 0;
   const keys = Object.create(null);
 
   function loadThree() {
@@ -42,10 +43,17 @@
     return Math.abs(dx) <= b.w / 2 && Math.abs(dz) <= b.d / 2;
   }
 
-  // Height of the walkable surface under (x,z): the highest floor / stair top.
-  function groundAt(x, z) {
+  // Walkable surface under (x,z): the highest floor / stair top you can reach —
+  // i.e. no more than STEP_UP above your feet (so you climb stairs one step at a
+  // time, and stay on the floor under the stairs instead of being lifted onto
+  // them). You can always drop to a lower surface (the floor is at 0).
+  function groundAt(x, z, feetY) {
     let g = 0;
-    for (const b of grounds) if (inFootprint(b, x, z)) g = Math.max(g, b.z + b.h);
+    for (const b of grounds) {
+      if (!inFootprint(b, x, z)) continue;
+      const top = b.z + b.h;
+      if (top <= feetY + STEP_UP && top > g) g = top;
+    }
     return g;
   }
 
@@ -102,8 +110,8 @@
       if (b.kind === "floor" || b.kind === "stair") grounds.push(b);
     }
 
-    const g0 = groundAt(data.spawn.x, data.spawn.y);
-    camera.position.set(data.spawn.x, g0 + EYE, data.spawn.y);
+    groundY = groundAt(data.spawn.x, data.spawn.y, 0);
+    camera.position.set(data.spawn.x, groundY + EYE, data.spawn.y);
     yaw = 0; pitch = 0; flyOffset = 0;
     onResize();
   }
@@ -142,7 +150,8 @@
 
     camera.position.x = x;
     camera.position.z = z;
-    camera.position.y = groundAt(x, z) + EYE + flyOffset;
+    groundY = groundAt(x, z, groundY); // step-up / drop follow (climb or go under stairs)
+    camera.position.y = groundY + EYE + flyOffset;
     renderer.render(scene, camera);
   }
 
