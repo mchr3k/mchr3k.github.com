@@ -2681,6 +2681,9 @@
       save();
       select({ kind: "electric", roomId: r.room.id, elecId: clone.id });
     } else {
+      const objMap = {};
+      const objects = r.room.objects.map((o) => { const id = uid("o"); objMap[o.id] = id; return { ...o, id }; });
+      for (const o of objects) if (o.type === "stairtop" && o.stairId) o.stairId = objMap[o.stairId] || o.stairId;
       const clone = {
         ...r.room,
         id: uid("r"),
@@ -2688,7 +2691,7 @@
         x: r.room.x + 30,
         y: r.room.y + 30,
         ...cloneNotchesAndOpenings(r.room),
-        objects: r.room.objects.map((o) => ({ ...o, id: uid("o") })),
+        objects,
       };
       state.rooms.push(clone);
       save();
@@ -2742,16 +2745,16 @@
   }
 
   function cloneLayout(layout, name) {
-    return {
-      id: uid("l"),
-      name,
-      rooms: layout.rooms.map((r) => ({
-        ...r,
-        id: uid("r"),
-        ...cloneNotchesAndOpenings(r),
-        objects: r.objects.map((o) => ({ ...o, id: uid("o") })),
-      })),
-    };
+    const objMap = {};
+    const rooms = layout.rooms.map((r) => ({
+      ...r,
+      id: uid("r"),
+      ...cloneNotchesAndOpenings(r),
+      objects: r.objects.map((o) => { const id = uid("o"); objMap[o.id] = id; return { ...o, id }; }),
+    }));
+    // Keep each "Stairs up" marker pointing at its staircase's new id.
+    for (const r of rooms) for (const o of r.objects) if (o.type === "stairtop" && o.stairId) o.stairId = objMap[o.stairId] || o.stairId;
+    return { id: uid("l"), name, rooms };
   }
 
   function duplicateLayout() {
@@ -3659,6 +3662,29 @@
 
   // Coerce loaded data into the current schema. Accepts both the current
   // multi-layout shape and the older single-`rooms` shape (and hand edits).
+  // A "Stairs up" marker links to its staircase by id. Duplicating a layout used to
+  // mint fresh object ids without repointing the marker, orphaning it so the floors
+  // it should join never linked up (the staircase rendered broken). Repair any such
+  // marker on load by relinking it to a stair in its own room that still lacks a
+  // marker — so already-saved broken layouts fix themselves next time they load.
+  function relinkStairTops(rooms) {
+    const stairs = [];
+    for (const r of rooms) for (const o of r.objects || []) if (o.type === "stair") stairs.push({ o, room: r });
+    const stairIds = new Set(stairs.map((s) => s.o.id));
+    const claimed = new Set();
+    for (const r of rooms) for (const o of r.objects || []) if (o.type === "stairtop" && stairIds.has(o.stairId)) claimed.add(o.stairId);
+    for (const r of rooms) for (const o of r.objects || []) {
+      if (o.type !== "stairtop" || stairIds.has(o.stairId)) continue;
+      let best = null, bd = Infinity;
+      for (const s of stairs) {
+        if (s.room !== r || claimed.has(s.o.id)) continue;
+        const dx = s.o.x + s.o.w / 2 - (o.x + o.w / 2), dy = s.o.y + s.o.h / 2 - (o.y + o.h / 2), d = dx * dx + dy * dy;
+        if (d < bd) { bd = d; best = s; }
+      }
+      if (best) { o.stairId = best.o.id; claimed.add(best.o.id); }
+    }
+  }
+
   function normalize(data) {
     let layouts;
     if (Array.isArray(data.layouts) && data.layouts.length) {
@@ -3670,6 +3696,7 @@
     } else {
       layouts = [{ id: uid("l"), name: "Layout 1", rooms: (data.rooms || []).map(normalizeRoom) }];
     }
+    for (const l of layouts) relinkStairTops(l.rooms);
     const activeId = layouts.some((l) => l.id === data.activeId) ? data.activeId : layouts[0].id;
     const writers = data.writers && typeof data.writers === "object" ? data.writers : {};
     // Missing rev/updatedAt stay 0 so an untouched copy can't outrank real data.
