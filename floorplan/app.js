@@ -162,12 +162,21 @@
     n.depth = (n.depth < 0 ? -1 : 1) * mag;
   };
 
-  // Deep-copy a notch (with fresh ids) for duplication.
-  const cloneNotch = (n) => ({
-    ...n,
-    id: uid("n"),
-    children: (n.children || []).map(cloneNotch),
-  });
+  // Deep-copy a room's notches and openings together for duplication, minting fresh
+  // ids. Openings reference the cut-in/out they sit on by notch id, so the notches
+  // must be remapped *and* the openings repointed at the new ids — otherwise a
+  // duplicated room loses every window/door that lived on a cut-out.
+  function cloneNotchesAndOpenings(room) {
+    const idMap = {};
+    const mapNotch = (n) => {
+      const id = uid("n");
+      idMap[n.id] = id;
+      return { ...n, id, children: (n.children || []).map(mapNotch) };
+    };
+    const notches = (room.notches || []).map(mapNotch);
+    const openings = (room.openings || []).map((o) => ({ ...o, id: uid("op"), notch: o.notch ? idMap[o.notch] || o.notch : o.notch }));
+    return { notches, openings };
+  }
 
   // Walk one straight edge of length `length` from `start` in unit direction
   // `dir`, inserting `notches` along it and returning the resulting chain of
@@ -2678,8 +2687,7 @@
         name: r.room.name + " copy",
         x: r.room.x + 30,
         y: r.room.y + 30,
-        notches: (r.room.notches || []).map(cloneNotch),
-        openings: (r.room.openings || []).map((o) => ({ ...o, id: uid("op") })),
+        ...cloneNotchesAndOpenings(r.room),
         objects: r.room.objects.map((o) => ({ ...o, id: uid("o") })),
       };
       state.rooms.push(clone);
@@ -2740,8 +2748,7 @@
       rooms: layout.rooms.map((r) => ({
         ...r,
         id: uid("r"),
-        notches: (r.notches || []).map(cloneNotch),
-        openings: (r.openings || []).map((o) => ({ ...o, id: uid("op") })),
+        ...cloneNotchesAndOpenings(r),
         objects: r.objects.map((o) => ({ ...o, id: uid("o") })),
       })),
     };
@@ -3243,12 +3250,14 @@
         };
         // How far down a full-height wall run reaches. Normally to the top of the
         // storey below (whose walls stop 2 cm under their ceiling), closing flush onto
-        // it. But where this storey overhangs open exterior — its footprint sticks out
-        // past the storey below (e.g. an upper floor 3 cm wider than the lower) — the
-        // wall must drop all the way to the ground, or you'd see out under its edge
-        // through a stairwell. Sample just outside the wall at the storey below: if no
-        // lower room is there, it's an overhang, so reach the ground.
-        let belowTop = -Infinity;
+        // it. But where this storey overhangs *open exterior* — its footprint sticks
+        // out past the storey below (e.g. an upper floor 3 cm wider than the lower) —
+        // the wall must drop all the way to the ground, or you'd see out under its edge
+        // through a stairwell. Only a true overhang drops: a wall that stands *over* a
+        // lower room must not, or it would hang down inside that room and back its
+        // windows. So drop to the ground only when the wall's own line sits in no lower
+        // room; otherwise stop at that room's ceiling.
+        let belowTop = -Infinity, overLower = false;
         if (worldRooms) {
           const smx = sxw + dx * seg.len / 2, smy = syw + dy * seg.len / 2;
           let onx = -dy, ony = dx;
@@ -3257,9 +3266,11 @@
           for (const wr of worldRooms) {
             if (wr.z1 > OZ + 4) continue; // not below this floor
             if (qx >= wr.minx && qx <= wr.maxx && qy >= wr.miny && qy <= wr.maxy) belowTop = Math.max(belowTop, wr.z1);
+            if (smx >= wr.minx && smx <= wr.maxx && smy >= wr.miny && smy <= wr.maxy) overLower = true; // wall stands over this room
           }
         }
-        const wallBase = Math.min(-(thisElev + 2), belowTop > -Infinity ? belowTop - 2 - OZ : -OZ);
+        const wallBase = belowTop > -Infinity ? Math.min(-(thisElev + 2), belowTop - 2 - OZ)
+          : (worldRooms && !overLower ? -OZ : -(thisElev + 2));
         let cursor = 0;
         for (const h of holes) {
           wall(cursor, h.a, wallBase, segH);
